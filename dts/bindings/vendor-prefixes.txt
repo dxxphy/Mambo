@@ -5,4 +5,6 @@ pid	PID Controller
 ares	ARES Devices
 pixart	PixArt Imaging Inc.
 lk	Lingkong Corp.
+rs	RobStride Dynamics.
+vesc	VESC Project.
 custom	Custom virtual device examples
