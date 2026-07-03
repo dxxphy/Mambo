@@ -305,8 +305,7 @@ void mi_rx_data_handler(struct k_work *work)
 
 		float prev_angle = data->common.angle;
 		data->common.angle =
-			(uint16_to_float(data->RAWangle, (double)P_MIN, (double)P_MAX, 16)) *
-			RAD2DEG;
+			(uint16_to_float(data->RAWangle, (double)P_MIN, (double)P_MAX, 16))*RAD2DEG;
 		data->common.rpm =
 			RADPS2RPM(uint16_to_float(data->RAWrpm, (double)V_MIN, (double)V_MAX, 16));
 		data->common.torque =

@@ -208,7 +208,8 @@ static int ares_if_request_handler(struct usbd_class_data *const c_data, struct 
 					b3 = buf->data[3];
 				}
 
-				LOG_INF("ARES Bulk OUT #%u len=%u head=0x%04x bytes=%02x %02x %02x %02x",
+				LOG_INF("ARES Bulk OUT #%u len=%u head=0x%04x bytes=%02x %02x %02x "
+					"%02x",
 					rx_count, buf->len, head, b0, b1, b2, b3);
 			}
 			if (k_msgq_put(&incoming_data_msgq, &buf, K_NO_WAIT) != 0) {
