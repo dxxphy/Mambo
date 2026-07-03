@@ -4,14 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <zephyr/kernel.h>
-#include <zephyr/device.h>
-#include <zephyr/drivers/can.h>
 #include <zephyr/drivers/motor.h>
-
-int8_t get_can_id(const struct device *dev);
-int8_t reg_can_dev(const struct device *dev);
-
-int can_send_queued(const struct device *can_dev, struct can_frame *frame);
 
 enum motor_runtime_stat {
 	MOTOR_STAT_UNSUPPORTED_MODE,
