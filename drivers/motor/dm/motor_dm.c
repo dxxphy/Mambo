@@ -17,10 +17,13 @@
 #include "zephyr/drivers/can.h"
 #include "zephyr/drivers/motor.h"
 #include "zephyr/kernel.h"
+#include <zephyr/sys/util.h>
 
 #define DT_DRV_COMPAT dm_motor
 
 #define DM_OFFLINE_ENABLE_RETRY_TX_COUNT 50U
+#define DM_OFFLINE_MISSED_REPLIES        4
+#define DM_TX_TIMER_PERIOD_MS            1U
 
 LOG_MODULE_REGISTER(motor_dm, CONFIG_MOTOR_LOG_LEVEL);
 
@@ -66,7 +69,14 @@ static inline int float_to_uint(float x, float x_min, float x_max, int bits)
 	return (int)((x - offset) * ((float)((1 << bits) - 1)) / span);
 }
 
-static void dm_send_cmd_frame(const struct device *dev, const uint8_t data[8], const char *tag)
+static uint32_t dm_control_period_ms(const struct dm_motor_config *cfg)
+{
+	uint32_t freq = cfg->freq > 0 ? (uint32_t)cfg->freq : 1U;
+
+	return MAX(1U, 1000U / freq);
+}
+
+static int dm_send_cmd_frame(const struct device *dev, const uint8_t data[8], const char *tag)
 {
 	struct dm_motor_data *motor_data = dev->data;
 	const struct dm_motor_config *cfg = dev->config;
@@ -77,7 +87,7 @@ static void dm_send_cmd_frame(const struct device *dev, const uint8_t data[8], c
 	};
 
 	memcpy(frame.data, data, 8);
-	motor_can_sched_send_prio(cfg->common.phy, &frame, true, tag);
+	return motor_can_sched_send_prio(cfg->common.phy, &frame, true, tag);
 }
 
 int dm_init(const struct device *dev)
@@ -110,22 +120,30 @@ void dm_control(const struct device *dev, enum motor_cmd cmd)
 
 	switch (cmd) {
 	case ENABLE_MOTOR:
-		dm_send_cmd_frame(dev, enable_frame, "dm-enable");
+		if (dm_send_cmd_frame(dev, enable_frame, "dm-enable") < 0) {
+			motor_stats_inc(MOTOR_STAT_TX_ERROR);
+		}
 		motor_link_request_enable(&data->common.link);
 		break;
 	case DISABLE_MOTOR:
-		dm_send_cmd_frame(dev, disable_frame, "dm-disable");
+		if (dm_send_cmd_frame(dev, disable_frame, "dm-disable") < 0) {
+			motor_stats_inc(MOTOR_STAT_TX_ERROR);
+		}
 		motor_link_request_disable(&data->common.link);
 		data->enabled = false;
 		break;
 	case SET_ZERO:
-		dm_send_cmd_frame(dev, set_zero_frame, "dm-set-zero");
+		if (dm_send_cmd_frame(dev, set_zero_frame, "dm-set-zero") < 0) {
+			motor_stats_inc(MOTOR_STAT_TX_ERROR);
+		}
 		break;
 	case CLEAR_CONTROLLER:
 		memset(&data->params, 0, sizeof(data->params));
 		break;
 	case CLEAR_ERROR:
-		dm_send_cmd_frame(dev, clear_error_frame, "dm-clear-error");
+		if (dm_send_cmd_frame(dev, clear_error_frame, "dm-clear-error") < 0) {
+			motor_stats_inc(MOTOR_STAT_TX_ERROR);
+		}
 		break;
 	default:
 		motor_stats_inc(MOTOR_STAT_UNSUPPORTED_CMD);
@@ -212,7 +230,7 @@ static void dm_rx_handler(const struct device *can_dev, struct can_frame *frame,
 	}
 
 	motor_can_sched_report_rx(can_dev, frame);
-	data->prev_recv_time = k_uptime_get();
+	data->prev_recv_time = k_uptime_get_32();
 
 	data->err = frame->data[0] >> 4;
 	data->enabled = data->err & 1;
@@ -422,34 +440,48 @@ void dm_tx_data_handler(struct k_work *work)
 
 		if (!data->common.link.online && data->common.link.requested_enabled &&
 		    data->tx_cnt >= DM_OFFLINE_ENABLE_RETRY_TX_COUNT) {
-			dm_send_cmd_frame(motor_devices[i], enable_frame, "dm-retry-enable");
-			data->tx_cnt = 0;
+			if (dm_send_cmd_frame(motor_devices[i], enable_frame,
+					      "dm-retry-enable") == 0) {
+				data->tx_cnt = 0;
+			} else {
+				motor_stats_inc(MOTOR_STAT_TX_ERROR);
+			}
 		}
 		if (data->common.link.online && data->common.link.requested_enabled &&
 		    data->tx_cnt >= 3) {
 			if (!data->enabled) {
-				dm_send_cmd_frame(motor_devices[i], enable_frame, "dm-reenable");
+				if (dm_send_cmd_frame(motor_devices[i], enable_frame,
+						      "dm-reenable") < 0) {
+					motor_stats_inc(MOTOR_STAT_TX_ERROR);
+				}
 			}
 			data->tx_cnt = 0;
 			if (data->err > 1) {
-				dm_send_cmd_frame(motor_devices[i], clear_error_frame,
-						  "dm-clear-error");
+				if (dm_send_cmd_frame(motor_devices[i], clear_error_frame,
+						      "dm-clear-error") < 0) {
+					motor_stats_inc(MOTOR_STAT_TX_ERROR);
+				}
 			}
 		}
 		if (data->common.link.requested_enabled &&
-		    now - data->last_tx_time >= 1000 / cfg->freq) {
+		    now - data->last_tx_time >= dm_control_period_ms(cfg)) {
+			int ret;
+
 			dm_motor_pack(motor_devices[i], &tx_frame);
-			motor_can_sched_send_reply(cfg->common.phy, &tx_frame,
-						   cfg->common.rx_id & 0xFF, CAN_STD_ID_MASK, 5U,
-						   "dm-control");
-			data->last_tx_time = now;
-			data->tx_cnt++;
-		}
-		if (now - data->prev_recv_time > 10000 / cfg->freq && data->common.link.online &&
-		    data->common.link.requested_enabled) {
-			motor_link_mark_offline(motor_devices[i], &data->common.link,
-						MOTOR_TELEMETRY_REASON_RX_TIMEOUT);
-			data->enabled = false;
+			ret = motor_can_sched_send_reply(cfg->common.phy, &tx_frame,
+							 cfg->common.rx_id & 0xFF,
+							 CAN_STD_ID_MASK, 5U, "dm-control");
+			if (ret == 0) {
+				data->last_tx_time = now;
+				data->tx_cnt++;
+				if (motor_link_note_missed_reply(motor_devices[i],
+								 &data->common.link,
+								 DM_OFFLINE_MISSED_REPLIES)) {
+					data->enabled = false;
+				}
+			} else {
+				motor_stats_inc(MOTOR_STAT_TX_ERROR);
+			}
 		}
 		k_sleep(K_USEC(130));
 	}
@@ -479,12 +511,17 @@ void dm_init_handler(struct k_work *work)
 	k_sleep(K_MSEC(500));
 
 	for (int i = 0; i < MOTOR_COUNT; i++) {
-		dm_control(motor_devices[i], ENABLE_MOTOR);
+		const struct dm_motor_config *cfg =
+			(const struct dm_motor_config *)(motor_devices[i]->config);
 		struct dm_motor_data *data = motor_devices[i]->data;
-		data->prev_recv_time = k_uptime_get();
+
+		if (!cfg->read_only) {
+			dm_control(motor_devices[i], ENABLE_MOTOR);
+		}
+		data->prev_recv_time = k_uptime_get_32();
 	}
 
-	k_timer_start(&dm_tx_timer, K_NO_WAIT, K_MSEC(9));
+	k_timer_start(&dm_tx_timer, K_NO_WAIT, K_MSEC(DM_TX_TIMER_PERIOD_MS));
 	k_timer_user_data_set(&dm_tx_timer, &dm_tx_data_handle);
 }
 

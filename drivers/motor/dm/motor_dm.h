@@ -55,7 +55,7 @@ struct dm_motor_data {
 	bool update;
 	uint8_t tx_cnt;
 
-	uint64_t prev_recv_time;
+	uint32_t prev_recv_time;
 	int8_t err;
 
 	// Process round
@@ -80,6 +80,7 @@ struct dm_motor_config {
 
 	float gear_ratio;
 	int freq;
+	bool read_only;
 
 	float v_max;
 	float p_max;
@@ -144,7 +145,8 @@ K_TIMER_DEFINE(dm_tx_timer, dm_tx_isr_handler, NULL);
 		.v_max = (float)DT_STRING_UNQUOTED_OR(DT_DRV_INST(inst), v_max, 12.5),             \
 		.p_max = (float)DT_STRING_UNQUOTED_OR(DT_DRV_INST(inst), p_max, 20),               \
 		.t_max = (float)DT_STRING_UNQUOTED_OR(DT_DRV_INST(inst), t_max, 200),              \
-		.freq = (float)DT_PROP_OR(DT_DRV_INST(inst), freq, 500),                           \
+		.freq = CONFIG_MOTOR_DM_DEFAULT_FREQ_HZ,                                           \
+		.read_only = DT_PROP(DT_DRV_INST(inst), read_only),                                \
 	};
 
 #define MOTOR_DEVICE_DT_DEFINE(node_id, init_fn, pm, data, config, level, prio, api, ...)          \

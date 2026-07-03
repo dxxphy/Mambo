@@ -37,7 +37,8 @@
 #define CAN_PACKET_STATUS_4 16 // 10倍MOSFET温度、10倍电机温度、10倍输入电流、50倍电机位置（int16）
 #define CAN_PACKET_STATUS_5 27 // 转速计（int32），十倍输入电压（int16）和一个保留位（int16）
 
-#define CAN_FILTER_MASK 0xFF
+#define VESC_CAN_MOTOR_ID_MASK 0xFF
+#define VESC_CAN_MSG_TYPE_MASK 0xFF00
 
 #define VESC_CAN_SEND_STACK_SIZE 1536
 #define VESC_CAN_SEND_PRIORITY   -1
@@ -51,9 +52,10 @@ struct vesc_motor_data {
 	struct motor_driver_data common;
 	int8_t err;
 
-	uint64_t prev_recv_time;
+	uint32_t prev_recv_time;
 	uint64_t last_ping_time;
-	// bool update;
+	uint64_t last_control_time;
+	bool control_valid;
 	float delta_deg_sum;
 	float target_angle;   // 目标位置，单位度
 	float target_radps;   // 目标速度，单位弧度每秒
@@ -92,6 +94,8 @@ extern const struct motor_driver_api vesc_motor_api;
 		.common = MOTOR_DT_DRIVER_DATA_INST_GET(inst),                                     \
 		.prev_recv_time = 0,                                                               \
 		.last_ping_time = 0,                                                               \
+		.last_control_time = 0,                                                            \
+		.control_valid = false,                                                            \
 		.err = 0,                                                                          \
 		.delta_deg_sum = 0,                                                                \
 		.target_angle = 0,                                                                 \

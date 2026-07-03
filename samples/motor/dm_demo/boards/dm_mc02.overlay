@@ -10,7 +10,6 @@
 			can_channel = <&fdcan1>;
 			controllers = <&mit>;
 			t_max = "5";
-			freq = <1000>;
 		};
 	};
 

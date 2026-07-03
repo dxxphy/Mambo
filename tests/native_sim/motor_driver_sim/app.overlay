@@ -35,7 +35,6 @@
 		v_max = "12.5";
 		p_max = "12.5";
 		t_max = "12.0";
-		freq = <500>;
 		controllers = <&test_mit &test_speed>;
 	};
 

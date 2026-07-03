@@ -51,14 +51,6 @@ config MOTOR_TELEMETRY_CAN_LOG_INTERVAL_MS
 	help
 	  Minimum interval between repeated CAN scheduler pressure logs.
 
-config MOTOR_TELEMETRY_CAN_BUSY_WINDOW_US
-	int "Motor telemetry CAN busy window threshold in microseconds"
-	default 800
-	depends on MOTOR_TELEMETRY
-	help
-	  Log CAN scheduler pressure when the current 1 ms accounting window has
-	  at least this much TX, RX, or reserved reply airtime.
-
 config LA_YINSHI
 	bool "MOTOR LA YINSHI"
 	help
@@ -77,6 +69,13 @@ config MOTOR_DM
       Add support for dm motors
     select MOTOR_COMMON
 
+config MOTOR_DM_DEFAULT_FREQ_HZ
+	int "Default DM motor request frequency in Hz"
+	default 200
+	depends on MOTOR_DM
+	help
+	  Control request frequency for DM motors.
+
 config MOTOR_MI
     bool "MOTOR MI"
     help
@@ -94,6 +93,13 @@ config MOTOR_VESC
     help
       Add support for vesc motors
     select MOTOR_COMMON
+
+config MOTOR_VESC_CONTROL_FREQ_HZ
+	int "VESC control frame frequency in Hz"
+	default 100
+	depends on MOTOR_VESC
+	help
+	  Periodic latest-value control frame rate for VESC motors.
 
 config MOTOR_LK
     bool "MOTOR LK"
