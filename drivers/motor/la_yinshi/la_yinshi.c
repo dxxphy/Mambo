@@ -13,6 +13,8 @@
 
 #include "la_yinshi.h"
 
+#include "../common/motor_telemetry.h"
+
 #include <string.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/util.h>
@@ -366,8 +368,7 @@ static int la_send_and_wait(const struct device *dev, uint8_t cmd, uint8_t index
 
 	/* All retries exhausted */
 	data_d->current_status.online = false;
-	LOG_WRN("%s: no reply after %d attempts (cmd=0x%02x idx=0x%02x)", dev->name,
-		max_retries + 1, cmd, index);
+	motor_telemetry_motor_offline(dev, MOTOR_TELEMETRY_REASON_RX_TIMEOUT, max_retries + 1);
 	return -ETIMEDOUT;
 }
 

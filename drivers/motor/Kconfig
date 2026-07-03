@@ -38,6 +38,27 @@ config MOTOR_CAN_SCHED_REPLY_GUARD_EXTRA_US
 	  Extra time added after the calculated reply frame airtime. This covers
 	  motor-side processing delay before the reply frame starts arbitration.
 
+config MOTOR_TELEMETRY
+	bool "Motor telemetry logging"
+	default y
+	help
+	  Centralize motor link state logs and motor CAN scheduler health logs.
+
+config MOTOR_TELEMETRY_CAN_LOG_INTERVAL_MS
+	int "Motor telemetry CAN scheduler log interval in milliseconds"
+	default 2000
+	depends on MOTOR_TELEMETRY
+	help
+	  Minimum interval between repeated CAN scheduler pressure logs.
+
+config MOTOR_TELEMETRY_CAN_BUSY_WINDOW_US
+	int "Motor telemetry CAN busy window threshold in microseconds"
+	default 800
+	depends on MOTOR_TELEMETRY
+	help
+	  Log CAN scheduler pressure when the current 1 ms accounting window has
+	  at least this much TX, RX, or reserved reply airtime.
+
 config LA_YINSHI
 	bool "MOTOR LA YINSHI"
 	help

@@ -1,4 +1,5 @@
 #include "motor_can_sched.h"
+#include "motor_telemetry.h"
 
 #include <errno.h>
 #include <string.h>
@@ -469,18 +470,23 @@ static void release_periodic_locked(void)
 	}
 }
 
-static void reset_window_if_needed(struct motor_can_sched_bus *bus)
+static bool reset_window_if_needed(struct motor_can_sched_bus *bus,
+				   struct motor_can_sched_stats *stats_out)
 {
 	uint32_t now = k_uptime_get_32();
 
 	if ((bus->last_log_ms != 0U) && (now - bus->last_log_ms < MOTOR_CAN_SCHED_LOG_WINDOW_MS)) {
-		return;
+		return false;
 	}
 
 	bus->last_log_ms = now;
+	if (stats_out != NULL) {
+		*stats_out = bus->stats;
+	}
 	bus->stats.window_tx_busy_us = 0U;
 	bus->stats.window_rx_busy_us = 0U;
 	bus->stats.window_reserved_us = 0U;
+	return true;
 }
 
 static void motor_can_sched_thread(void *arg1, void *arg2, void *arg3)
@@ -552,9 +558,15 @@ static void motor_can_sched_thread(void *arg1, void *arg2, void *arg3)
 				budget_us -= cost_us;
 			}
 
+			struct motor_can_sched_stats stats_snapshot;
+			bool report_stats;
+
 			key = k_spin_lock(&sched_lock);
-			reset_window_if_needed(bus);
+			report_stats = reset_window_if_needed(bus, &stats_snapshot);
 			k_spin_unlock(&sched_lock, key);
+			if (report_stats) {
+				motor_telemetry_can_scheduler_health(bus->can_dev, &stats_snapshot);
+			}
 		}
 
 		uint32_t now = k_uptime_get_32();
