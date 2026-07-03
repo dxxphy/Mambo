@@ -14,12 +14,11 @@
 
 - [电机](motor/README.md): 电机 API、控制器、CAN 调度、link/telemetry 与厂商驱动。
 - [驱动子系统](drivers/README.md): 底盘、轮组、SBUS、PID、传感器与图形。
-- [ARES](ares/README.md): 接口、协议、算法库、主控板、板间链路与 VOFA。
+- [通信协议](communication/README.md): ARES 接口、协议、上下位机链路、板间通信与 VOFA。
 - [VCAN](vcan/readme.md): SPI 虚拟 CAN 桥的使用和实现说明。
 - [平台](platform/README.md): 板级定义、应用结构、构建和烧录边界。
 - [样例](samples/README.md): 样例分类、硬件依赖和维护规则。
 - [测试与 CI](tests/README.md): CI、native_sim 与新增测试规范。
-- [Interlink](interlink/README.md): 上下位机与板间链路协议文档索引。
 - [Zephyr](zephyr/README.md): Mambo 作为 Zephyr 模块的集成方式。
 
 ## 约定
