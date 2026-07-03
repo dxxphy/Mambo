@@ -142,21 +142,18 @@ void motor_telemetry_can_scheduler_health(const struct device *can_dev,
 	pending_full_delta = stats->pending_full - previous.pending_full;
 	giveup_delta = stats->giveups - previous.giveups;
 	for (size_t i = 0; i < ARRAY_SIZE(dropped_by_prio_delta); i++) {
-		dropped_by_prio_delta[i] =
-			stats->dropped_by_prio[i] - previous.dropped_by_prio[i];
+		dropped_by_prio_delta[i] = stats->dropped_by_prio[i] - previous.dropped_by_prio[i];
 	}
 
-	pressure = (tx_busy_delta != 0U) || (dropped_delta != 0U) ||
-		   (ack_timeout_delta != 0U) ||
+	pressure = (tx_busy_delta != 0U) || (dropped_delta != 0U) || (ack_timeout_delta != 0U) ||
 		   (pending_full_delta != 0U) || (giveup_delta != 0U);
 
-	if ((CONFIG_MOTOR_LOG_LEVEL >= LOG_LEVEL_DBG) &&
-	    (stats->window_tx_latency_samples != 0U)) {
+	if ((CONFIG_MOTOR_LOG_LEVEL >= LOG_LEVEL_DBG) && (stats->window_tx_latency_samples != 0U)) {
 		uint32_t avg_latency_us =
 			stats->window_tx_latency_sum_us / stats->window_tx_latency_samples;
 
-		LOG_DBG("CAN %s scheduler tx latency: samples=%u avg=%uus max=%uus",
-			can_dev->name, stats->window_tx_latency_samples, avg_latency_us,
+		LOG_DBG("CAN %s scheduler tx latency: samples=%u avg=%uus max=%uus", can_dev->name,
+			stats->window_tx_latency_samples, avg_latency_us,
 			stats->window_tx_latency_max_us);
 	}
 
@@ -164,16 +161,14 @@ void motor_telemetry_can_scheduler_health(const struct device *can_dev,
 		return;
 	}
 
-	LOG_WRN_RATELIMIT_RATE(CONFIG_MOTOR_TELEMETRY_CAN_LOG_INTERVAL_MS,
-			       "CAN %s scheduler pressure: tx_busy+%u dropped+%u ack_timeout+%u "
-			       "pending_full+%u giveup+%u drop=[%u,%u,%u,%u] "
-			       "qpeak=[%u,%u,%u,%u] window=%uus(tx=%u rx=%u reserved=%u)",
-			       can_dev->name, tx_busy_delta, dropped_delta, ack_timeout_delta,
-			       pending_full_delta, giveup_delta,
-			       dropped_by_prio_delta[0], dropped_by_prio_delta[1],
-			       dropped_by_prio_delta[2], dropped_by_prio_delta[3],
-			       stats->queue_peak[0], stats->queue_peak[1], stats->queue_peak[2],
-			       stats->queue_peak[3], busy_window_us,
-			       stats->window_tx_busy_us, stats->window_rx_busy_us,
-			       stats->window_reserved_us);
+	LOG_WRN_RATELIMIT_RATE(
+		CONFIG_MOTOR_TELEMETRY_CAN_LOG_INTERVAL_MS,
+		"CAN %s scheduler pressure: tx_busy+%u dropped+%u ack_timeout+%u "
+		"pending_full+%u giveup+%u drop=[%u,%u,%u,%u] "
+		"qpeak=[%u,%u,%u,%u] window=%uus(tx=%u rx=%u reserved=%u)",
+		can_dev->name, tx_busy_delta, dropped_delta, ack_timeout_delta, pending_full_delta,
+		giveup_delta, dropped_by_prio_delta[0], dropped_by_prio_delta[1],
+		dropped_by_prio_delta[2], dropped_by_prio_delta[3], stats->queue_peak[0],
+		stats->queue_peak[1], stats->queue_peak[2], stats->queue_peak[3], busy_window_us,
+		stats->window_tx_busy_us, stats->window_rx_busy_us, stats->window_reserved_us);
 }

@@ -22,11 +22,7 @@ static const struct device *const motor = DEVICE_DT_GET(M2006_NODE);
 static const struct device *const can1 = DEVICE_DT_GET(CAN1_NODE);
 
 static const float test_rpm[] = {
-	0.0f,
-	30.0f,
-	60.0f,
-	-30.0f,
-	0.0f,
+	0.0f, 30.0f, 60.0f, -30.0f, 0.0f,
 };
 
 static const float test_torque[] = {
@@ -37,11 +33,7 @@ static const float test_torque[] = {
 };
 
 static const float test_angle[] = {
-	0.0f,
-	90.0f,
-	0.0f,
-	-90.0f,
-	0.0f,
+	0.0f, 90.0f, 0.0f, -90.0f, 0.0f,
 };
 
 static int32_t scale_100(float value)
@@ -64,7 +56,8 @@ static void log_status(const char *tag)
 		return;
 	}
 
-	LOG_INF("%s online=%d enabled=%d mode=%d target=%d err=%d rpm_x100=%d angle_x100=%d sum_x100=%d torque_x1000=%d temp_x100=%d",
+	LOG_INF("%s online=%d enabled=%d mode=%d target=%d err=%d rpm_x100=%d angle_x100=%d "
+		"sum_x100=%d torque_x1000=%d temp_x100=%d",
 		tag, status.online, status.enabled, status.mode, status.target, status.error,
 		scale_100(status.rpm), scale_100(status.angle), scale_100(status.sum_angle),
 		scale_1000(status.torque), scale_100(status.temperature));

@@ -542,9 +542,8 @@ static bool service_bus(struct motor_can_sched_bus *bus)
 	}
 
 	key = k_spin_lock(&sched_lock);
-	if (bus->tx_in_flight ||
-	    (IS_ENABLED(CONFIG_MOTOR_CAN_SCHED_REPLY_GUARD) &&
-	     !us_reached(now_us, bus->reply_guard_until_us))) {
+	if (bus->tx_in_flight || (IS_ENABLED(CONFIG_MOTOR_CAN_SCHED_REPLY_GUARD) &&
+				  !us_reached(now_us, bus->reply_guard_until_us))) {
 		k_spin_unlock(&sched_lock, key);
 		return false;
 	}

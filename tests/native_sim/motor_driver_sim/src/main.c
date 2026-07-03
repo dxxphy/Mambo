@@ -44,14 +44,14 @@
 #define SIM_TX_MAX     128
 #define SIM_CAN_DLEN   8U
 
-#define DM_RATE_WINDOW_MS 300
-#define MI_RATE_WINDOW_MS 300
-#define RS_RATE_WINDOW_MS 300
+#define DM_RATE_WINDOW_MS  300
+#define MI_RATE_WINDOW_MS  300
+#define RS_RATE_WINDOW_MS  300
 #define DJI_RATE_WINDOW_MS 300
 
-#define CONTROL_LATENCY_MS 1000
+#define CONTROL_LATENCY_MS     1000
 #define DJI_CONTROL_LATENCY_MS 30
-#define ONLINE_RECOVERY_MS 30
+#define ONLINE_RECOVERY_MS     30
 
 struct sim_filter {
 	bool used;
@@ -347,13 +347,15 @@ static void sim_dump_tx_since(uint32_t start)
 	uint32_t end = sim_tx_count;
 
 	for (uint32_t i = start; i < end; i++) {
-		const struct sim_tx_record *record = &sim_tx_history[i % ARRAY_SIZE(sim_tx_history)];
+		const struct sim_tx_record *record =
+			&sim_tx_history[i % ARRAY_SIZE(sim_tx_history)];
 		const struct can_frame *frame = &record->frame;
 
-		TC_PRINT("tx[%u] t=%u id=0x%x flags=0x%x dlc=%u data=%02x %02x %02x %02x %02x %02x %02x %02x\n",
-			 i, record->uptime_ms, frame->id, frame->flags, frame->dlc,
-			 frame->data[0], frame->data[1], frame->data[2], frame->data[3],
-			 frame->data[4], frame->data[5], frame->data[6], frame->data[7]);
+		TC_PRINT("tx[%u] t=%u id=0x%x flags=0x%x dlc=%u data=%02x %02x %02x %02x %02x %02x "
+			 "%02x %02x\n",
+			 i, record->uptime_ms, frame->id, frame->flags, frame->dlc, frame->data[0],
+			 frame->data[1], frame->data[2], frame->data[3], frame->data[4],
+			 frame->data[5], frame->data[6], frame->data[7]);
 	}
 
 	k_spin_unlock(&sim_lock, key);
@@ -406,10 +408,9 @@ static void wait_for_tx_after(uint32_t start, bool (*match)(const struct can_fra
 static void expect_payload_sequence_step(const char *name,
 					 bool (*base_match)(const struct can_frame *frame),
 					 uint32_t expected_id, uint32_t expected_id_mask,
-					 const uint8_t expected[CAN_MAX_DLEN],
-					 uint32_t set_at_ms, void (*emit_feedback)(void),
-					 int latency_limit_ms, uint32_t *start,
-					 uint32_t *previous_match)
+					 const uint8_t expected[CAN_MAX_DLEN], uint32_t set_at_ms,
+					 void (*emit_feedback)(void), int latency_limit_ms,
+					 uint32_t *start, uint32_t *previous_match)
 {
 	struct sim_tx_record record;
 	uint32_t index = 0;
@@ -442,13 +443,13 @@ static void expect_payload_sequence_step(const char *name,
 	}
 
 	sim_dump_tx_since(*start);
-	TC_PRINT("%s expected id=0x%x mask=0x%x dlc=%u data=%02x %02x %02x %02x %02x %02x %02x %02x\n",
+	TC_PRINT("%s expected id=0x%x mask=0x%x dlc=%u data=%02x %02x %02x %02x %02x %02x %02x "
+		 "%02x\n",
 		 name, expected_tx.id, expected_tx.id_mask, expected_tx.dlc, expected_tx.data[0],
-		 expected_tx.data[1], expected_tx.data[2], expected_tx.data[3],
-		 expected_tx.data[4], expected_tx.data[5], expected_tx.data[6],
-		 expected_tx.data[7]);
-	zassert_true(false, "%s did not transmit the expected CAN frame (tx count %u -> %u)",
-		     name, *start, sim_current_tx_count());
+		 expected_tx.data[1], expected_tx.data[2], expected_tx.data[3], expected_tx.data[4],
+		 expected_tx.data[5], expected_tx.data[6], expected_tx.data[7]);
+	zassert_true(false, "%s did not transmit the expected CAN frame (tx count %u -> %u)", name,
+		     *start, sim_current_tx_count());
 	return;
 
 matched:
@@ -752,8 +753,8 @@ static void service_dji_tx_work(void)
 	dji_tx_handler(&ctrl_structs[0].full_handle);
 }
 
-static uint32_t wait_for_online_state_timed(const struct device *dev, bool expected,
-					    int timeout_ms, const char *name)
+static uint32_t wait_for_online_state_timed(const struct device *dev, bool expected, int timeout_ms,
+					    const char *name)
 {
 	uint32_t start = (uint32_t)k_uptime_get();
 	int64_t deadline = k_uptime_get() + timeout_ms;
@@ -881,8 +882,8 @@ static void expect_rate_window(const char *name, uint32_t count, uint32_t min, u
 		sim_dump_tx_since(0);
 	}
 	zassert_between_inclusive(count, min, max,
-				  "%s sent %u frames outside expected rate window [%u, %u]",
-				  name, count, min, max);
+				  "%s sent %u frames outside expected rate window [%u, %u]", name,
+				  count, min, max);
 }
 
 typedef void (*expected_payload_fn)(float value, uint8_t data[CAN_MAX_DLEN]);
@@ -904,8 +905,8 @@ static void bring_request_reply_motor_online(const struct device *dev, const cha
 
 static void verify_mit_payload_sequence(const struct device *dev, const char *name,
 					bool (*match_tx)(const struct can_frame *frame),
-					void (*emit_feedback)(void), expected_payload_fn build_payload,
-					uint32_t expected_id)
+					void (*emit_feedback)(void),
+					expected_payload_fn build_payload, uint32_t expected_id)
 {
 	const float speeds[] = {10.0f, 20.0f, 30.0f};
 	uint8_t payload[CAN_MAX_DLEN];
@@ -1027,12 +1028,12 @@ ZTEST(motor_driver_sim, test_request_reply_motor_drivers)
 
 ZTEST(motor_driver_sim, test_continuous_command_packing_order_and_latency)
 {
-	verify_mit_payload_sequence(DM_DEV, "DM", match_dm_tx, emit_dm_feedback,
-				    expected_dm_mit, DM_TX_ID);
-	verify_mit_payload_sequence(MI_DEV, "MI", match_mi_tx, emit_mi_feedback,
-				    expected_mi_mit, expected_mi_mit_id());
-	verify_mit_payload_sequence(RS_DEV, "RS", match_rs_tx, emit_rs_feedback,
-				    expected_rs_mit, expected_rs_mit_id());
+	verify_mit_payload_sequence(DM_DEV, "DM", match_dm_tx, emit_dm_feedback, expected_dm_mit,
+				    DM_TX_ID);
+	verify_mit_payload_sequence(MI_DEV, "MI", match_mi_tx, emit_mi_feedback, expected_mi_mit,
+				    expected_mi_mit_id());
+	verify_mit_payload_sequence(RS_DEV, "RS", match_rs_tx, emit_rs_feedback, expected_rs_mit,
+				    expected_rs_mit_id());
 	verify_lk_payload_sequence();
 }
 

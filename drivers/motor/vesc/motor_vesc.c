@@ -83,9 +83,9 @@ static uint32_t vesc_offline_timeout_ms(const struct vesc_motor_config *cfg)
 
 static uint32_t vesc_control_period_ms(void)
 {
-	uint32_t freq = CONFIG_MOTOR_VESC_CONTROL_FREQ_HZ > 0 ?
-				(uint32_t)CONFIG_MOTOR_VESC_CONTROL_FREQ_HZ :
-				1U;
+	uint32_t freq = CONFIG_MOTOR_VESC_CONTROL_FREQ_HZ > 0
+				? (uint32_t)CONFIG_MOTOR_VESC_CONTROL_FREQ_HZ
+				: 1U;
 
 	return MAX(1U, 1000U / freq);
 }
@@ -119,8 +119,7 @@ static int vesc_send_control(const struct device *dev)
 
 	vesc_motor_pack(dev, &frame);
 	return motor_can_sched_send_with_priority(cfg->common.phy, &frame,
-						  MOTOR_CAN_SCHED_PRIO_NORMAL,
-						  "vesc-control");
+						  MOTOR_CAN_SCHED_PRIO_NORMAL, "vesc-control");
 }
 
 static void vesc_monitor_handler(struct k_work *work)
@@ -445,8 +444,7 @@ static int vesc_register_pong_filter(const struct device *can_dev, uint8_t host_
 	};
 
 	for (int i = 0; i < ARRAY_SIZE(vesc_pong_filters); i++) {
-		if (vesc_pong_filters[i].registered &&
-		    vesc_pong_filters[i].can_dev == can_dev &&
+		if (vesc_pong_filters[i].registered && vesc_pong_filters[i].can_dev == can_dev &&
 		    vesc_pong_filters[i].host_id == host_id) {
 			return 0;
 		}

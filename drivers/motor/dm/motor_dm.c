@@ -440,8 +440,8 @@ void dm_tx_data_handler(struct k_work *work)
 
 		if (!data->common.link.online && data->common.link.requested_enabled &&
 		    data->tx_cnt >= DM_OFFLINE_ENABLE_RETRY_TX_COUNT) {
-			if (dm_send_cmd_frame(motor_devices[i], enable_frame,
-					      "dm-retry-enable") == 0) {
+			if (dm_send_cmd_frame(motor_devices[i], enable_frame, "dm-retry-enable") ==
+			    0) {
 				data->tx_cnt = 0;
 			} else {
 				motor_stats_inc(MOTOR_STAT_TX_ERROR);
@@ -469,8 +469,8 @@ void dm_tx_data_handler(struct k_work *work)
 
 			dm_motor_pack(motor_devices[i], &tx_frame);
 			ret = motor_can_sched_send_reply(cfg->common.phy, &tx_frame,
-							 cfg->common.rx_id & 0xFF,
-							 CAN_STD_ID_MASK, 5U, "dm-control");
+							 cfg->common.rx_id & 0xFF, CAN_STD_ID_MASK,
+							 5U, "dm-control");
 			if (ret == 0) {
 				data->last_tx_time = now;
 				data->tx_cnt++;
