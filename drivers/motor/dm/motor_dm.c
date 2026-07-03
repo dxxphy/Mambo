@@ -5,11 +5,12 @@
  */
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
-#include <sys/_stdint.h>
 #include "../common/common.h"
+#include "../common/motor_link.h"
 #include "../common/motor_can_sched.h"
 #include "motor_dm.h"
 #include "syscalls/kernel.h"
@@ -82,6 +83,7 @@ static void dm_send_cmd_frame(const struct device *dev, const uint8_t data[8], c
 int dm_init(const struct device *dev)
 {
 	const struct dm_motor_config *cfg = dev->config;
+	static bool work_queue_started;
 
 	if (!device_is_ready(cfg->common.phy)) {
 		return -1;
@@ -89,7 +91,12 @@ int dm_init(const struct device *dev)
 	if (k_work_busy_get(&dm_init_work) != 0) {
 		return 0;
 	}
-	k_work_queue_init(&dm_work_queue);
+	if (!work_queue_started) {
+		k_work_queue_init(&dm_work_queue);
+		k_work_queue_start(&dm_work_queue, dm_work_queue_stack, CAN_SEND_STACK_SIZE,
+				   CAN_SEND_PRIORITY, NULL);
+		work_queue_started = true;
+	}
 
 	dm_tx_timer.expiry_fn = dm_isr_init_handler;
 	k_timer_start(&dm_tx_timer, K_MSEC(500), K_MSEC(7));
@@ -104,13 +111,12 @@ void dm_control(const struct device *dev, enum motor_cmd cmd)
 	switch (cmd) {
 	case ENABLE_MOTOR:
 		dm_send_cmd_frame(dev, enable_frame, "dm-enable");
-		data->enable = true;
-		data->online = true;
-		data->prev_recv_time = k_uptime_get();
+		motor_link_request_enable(&data->enable, NULL);
 		break;
 	case DISABLE_MOTOR:
 		dm_send_cmd_frame(dev, disable_frame, "dm-disable");
-		data->enable = false;
+		motor_link_request_disable(&data->online, &data->enable, NULL);
+		data->enabled = false;
 		break;
 	case SET_ZERO:
 		dm_send_cmd_frame(dev, set_zero_frame, "dm-set-zero");
@@ -188,6 +194,9 @@ int dm_get(const struct device *dev, motor_status_t *status)
 	status->speed_limit[1] = cfg->v_max;
 	status->torque_limit[0] = cfg->t_max;
 	status->torque_limit[1] = cfg->t_max;
+	status->online = data->online;
+	status->enabled = data->enabled;
+	status->error = data->err;
 	return 0;
 }
 
@@ -215,7 +224,7 @@ static void dm_rx_handler(const struct device *can_dev, struct can_frame *frame,
 	if (!data->online) {
 		LOG_INF("Motor %s is online.", dev->name);
 	}
-	data->online = true;
+	motor_link_observe_reply(&data->online, NULL);
 
 	k_work_submit_to_queue(&dm_work_queue, &dm_rx_data_handle);
 }
@@ -305,7 +314,7 @@ static void dm_apply_controller_mode(const struct device *dev, enum motor_mode m
 		union {
 			float f;
 			uint32_t u;
-	} conv;
+		} conv;
 		conv.f = data->params.k_p;
 		dm_edit_reg_value(cfg->common.phy, cfg->common.tx_id, 0x19, conv.u);
 		conv.f = data->params.k_i;
@@ -336,7 +345,7 @@ int dm_set(const struct device *dev, motor_setpoint_t *status)
 
 	if (status->mode == MIT) {
 		data->common.target = MOTOR_TARGET_POSITION;
-		data->target_angle = status->angle/(RAD2DEG);
+		data->target_angle = status->angle / (RAD2DEG);
 		data->target_radps = RPM2RADPS(status->rpm);
 		data->target_torque = status->torque;
 		// data->params.k_p = 0;
@@ -384,7 +393,7 @@ void dm_rx_data_handler(struct k_work *work)
 
 		float prev_angle = data->common.angle;
 		data->common.angle =
-			(uint_to_float(data->RAWangle, -cfg->p_max, cfg->p_max, 16))*RAD2DEG;
+			(uint_to_float(data->RAWangle, -cfg->p_max, cfg->p_max, 16)) * RAD2DEG;
 		data->common.rpm =
 			RADPS2RPM(uint_to_float(data->RAWrpm, -cfg->v_max, cfg->v_max, 12));
 		data->common.torque = uint_to_float(data->RAWtorque, -cfg->t_max, cfg->t_max, 12);
@@ -403,8 +412,6 @@ void dm_tx_isr_handler(struct k_timer *dummy)
 void dm_isr_init_handler(struct k_timer *dummy)
 {
 	dummy->expiry_fn = dm_tx_isr_handler;
-	k_work_queue_start(&dm_work_queue, dm_work_queue_stack, CAN_SEND_STACK_SIZE,
-			   CAN_SEND_PRIORITY, NULL);
 	k_work_submit_to_queue(&dm_work_queue, &dm_init_work);
 }
 
@@ -436,8 +443,8 @@ void dm_tx_data_handler(struct k_work *work)
 		if (now - data->last_tx_time >= 1000 / cfg->freq) {
 			dm_motor_pack(motor_devices[i], &tx_frame);
 			motor_can_sched_send_reply(cfg->common.phy, &tx_frame,
-						   cfg->common.rx_id & 0xFF,
-						   CAN_STD_ID_MASK, 5U, "dm-control");
+						   cfg->common.rx_id & 0xFF, CAN_STD_ID_MASK, 5U,
+						   "dm-control");
 			data->last_tx_time = now;
 			data->tx_cnt++;
 		}

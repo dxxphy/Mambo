@@ -2,6 +2,7 @@
 #include "zephyr/device.h"
 #include "zephyr/drivers/can.h"
 #include "../common/common.h"
+#include "../common/motor_link.h"
 #include "../common/motor_can_sched.h"
 #include "zephyr/drivers/motor.h"
 #include <stdbool.h>
@@ -9,13 +10,10 @@
 #include <string.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-#include <sys/_stdint.h>
 
 #define DT_DRV_COMPAT lk_motor
 
 LOG_MODULE_REGISTER(motor_lk, CONFIG_MOTOR_LOG_LEVEL);
-
-struct k_sem tx_frame_sem;
 
 int float_to_int(float x, float x_min, float x_max, int bits)
 {
@@ -66,15 +64,12 @@ void lk_motor_control(const struct device *dev, enum motor_cmd cmd)
 		frame.data[0] = LK_CMD_MOTOR_RUN; // 0x88
 		motor_can_sched_send_prio(cfg->common.phy, &frame, true, "lk-enable");
 		k_msleep(10);
-		data->online = true;
-		data->enabled = true;
-		data->missed_times = 0;
+		motor_link_request_enable(&data->enabled, &data->missed_times);
 		break;
 	case DISABLE_MOTOR:
 		frame.data[0] = LK_CMD_MOTOR_OFF; // 0x80
 		motor_can_sched_send_prio(cfg->common.phy, &frame, true, "lk-disable");
-		data->online = false;
-		data->enabled = false;
+		motor_link_request_disable(&data->online, &data->enabled, &data->missed_times);
 		break;
 	case SET_ZERO:
 		// 设置当前位置为零点 (写入ROM)
@@ -235,8 +230,7 @@ int lk_set(const struct device *dev, motor_setpoint_t *status)
 		int controller_param_idx = -1;
 
 		// 0->Angle, 1->Speed, 2->Torque
-		if (ctrl_cfg->info.mode == PV &&
-		    ctrl_cfg->info.target == MOTOR_TARGET_POSITION) {
+		if (ctrl_cfg->info.mode == PV && ctrl_cfg->info.target == MOTOR_TARGET_POSITION) {
 			controller_param_idx = 0;
 		} else if (ctrl_cfg->info.mode == VO &&
 			   ctrl_cfg->info.target == MOTOR_TARGET_SPEED) {
@@ -296,13 +290,11 @@ static void lk_can_rx_handler(const struct device *can_dev, struct can_frame *fr
 	}
 
 	struct lk_motor_data *data = (struct lk_motor_data *)(motor_devices[idx]->data);
-	data->missed_times--;
 	if (!data->online) {
-		data->missed_times = 0;
-		data->online = true;
 		data->need_init_frames = true;
 		LOG_INF("Motor %s is online.", motor_devices[idx]->name);
 	}
+	motor_link_observe_reply(&data->online, &data->missed_times);
 	// Data[0]: 命令字节
 	// Data[1]: 温度
 	// Data[2-3]: 转矩电流/功率
@@ -358,15 +350,12 @@ void lk_tx_data_handler(struct k_work *work)
 		const struct lk_motor_cfg *cfg = motor_devices[i]->config;
 
 		if (data->enabled) {
-			if (data->missed_times > 10 && data->online) {
+			if (motor_link_note_missed_reply(&data->online, data->enabled,
+							 &data->missed_times, 10)) {
 				LOG_ERR("Motor %s is not responding, setting it to offline.",
 					motor_devices[i]->name);
 
-				data->online = false;
 				data->offline_tx_cnt = 0;
-			}
-			if (data->missed_times < 100) {
-				data->missed_times++;
 			}
 			if (!data->online) {
 				if ((data->offline_tx_cnt++ % 3U) == 0U) {
@@ -397,8 +386,8 @@ void lk_tx_data_handler(struct k_work *work)
 			}
 			lk_motor_pack(motor_devices[i], &tx_frame);
 			motor_can_sched_send_reply(cfg->common.phy, &tx_frame,
-						   LK_CMD_ID_BASE + cfg->id, CAN_STD_ID_MASK,
-						   5U, "lk-control");
+						   LK_CMD_ID_BASE + cfg->id, CAN_STD_ID_MASK, 5U,
+						   "lk-control");
 		}
 		// if (i % 2 == 1) {
 		//     k_usleep(500);
@@ -412,8 +401,7 @@ void lk_tx_params_data_handler(struct k_work *work)
 	for (int i = 0; i < MOTOR_COUNT; i++) {
 		struct lk_motor_data *data = motor_devices[i]->data;
 		const struct lk_motor_cfg *cfg = motor_devices[i]->config;
-		if (data->params_update[0] || data->params_update[1] ||
-		    data->params_update[2]) {
+		if (data->params_update[0] || data->params_update[1] || data->params_update[2]) {
 			tx_frame.id = LK_CMD_ID_BASE + cfg->id; // 0x160 + ID
 			tx_frame.dlc = 8;
 			tx_frame.flags = 0; // 标准帧
@@ -561,6 +549,9 @@ int lk_get(const struct device *dev, motor_status_t *status)
 	status->mode = data->common.mode;
 	status->target = data->common.target;
 	status->controller_id = data->common.controller_id;
+	status->online = data->online;
+	status->enabled = data->enabled;
+	status->error = data->err;
 	return 0;
 }
 

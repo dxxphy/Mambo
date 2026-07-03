@@ -71,9 +71,9 @@ struct dji_motor_data {
 	int8_t RAWtemp;
 	int32_t angle_add;
 
-		uint32_t curr_time;
-		uint32_t prev_time;
-	int8_t missed_times;
+	uint32_t curr_time;
+	uint32_t prev_time;
+	int16_t missed_times;
 
 	float angle_offset;
 

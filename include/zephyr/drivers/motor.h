@@ -22,7 +22,6 @@
  */
 
 #include <zephyr/toolchain.h>
-#include <sys/_intsup.h>
 #include <stdbool.h>
 #include <math.h>
 #include <zephyr/kernel.h>

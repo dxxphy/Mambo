@@ -2,12 +2,12 @@
 #include "zephyr/device.h"
 #include "zephyr/drivers/can.h"
 #include "../common/common.h"
+#include "../common/motor_link.h"
 #include "../common/motor_can_sched.h"
 #include "zephyr/drivers/motor.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
-#include <sys/_stdint.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/time_units.h>
@@ -15,8 +15,6 @@
 #define DT_DRV_COMPAT mi_motor
 
 LOG_MODULE_REGISTER(motor_mi, CONFIG_MOTOR_LOG_LEVEL);
-
-struct k_sem tx_frame_sem;
 
 static float uint16_to_float(uint16_t x, float x_min, float x_max, int bits)
 {
@@ -39,6 +37,8 @@ int float_to_uint(float x, float x_min, float x_max, int bits)
 int mi_init(const struct device *dev)
 {
 	const struct mi_motor_cfg *cfg = dev->config;
+	static bool work_queue_started;
+
 	if (!device_is_ready(cfg->common.phy)) {
 		motor_stats_inc(MOTOR_STAT_CONFIG_ERROR);
 		return -1;
@@ -46,7 +46,12 @@ int mi_init(const struct device *dev)
 	if (k_work_busy_get(&mi_init_work) != 0) {
 		return 0;
 	}
-	k_work_queue_init(&mi_work_queue);
+	if (!work_queue_started) {
+		k_work_queue_init(&mi_work_queue);
+		k_work_queue_start(&mi_work_queue, mi_work_queue_stack, CAN_SEND_STACK_SIZE,
+				   CAN_SEND_PRIORITY, NULL);
+		work_queue_started = true;
+	}
 
 	mi_tx_timer.expiry_fn = mi_isr_init_handler;
 	k_timer_start(&mi_tx_timer, K_MSEC(600), K_MSEC(2));
@@ -71,14 +76,12 @@ void mi_motor_control(const struct device *dev, enum motor_cmd cmd)
 	case ENABLE_MOTOR:
 		mi_can_id->mi_msg_mode = Communication_Type_MotorEnable;
 		motor_can_sched_send_prio(cfg->common.phy, &frame, true, "mi-enable");
-		data->online = true;
-		data->enabled = true;
+		motor_link_request_enable(&data->enabled, &data->missed_times);
 		break;
 	case DISABLE_MOTOR:
 		mi_can_id->mi_msg_mode = Communication_Type_MotorStop;
 		motor_can_sched_send_prio(cfg->common.phy, &frame, true, "mi-disable");
-		data->online = false;
-		data->enabled = false;
+		motor_link_request_disable(&data->online, &data->enabled, &data->missed_times);
 		break;
 	case SET_ZERO:
 		mi_can_id->mi_msg_mode = Communication_Type_SetPosZero;
@@ -273,10 +276,10 @@ static void mi_can_rx_handler(const struct device *can_dev, struct can_frame *fr
 
 	struct mi_motor_data *data = (struct mi_motor_data *)(motor_devices[id]->data);
 
-	if (data->missed_times > 0) {
-
-		data->missed_times = 0;
+	if (!data->online) {
+		LOG_INF("Motor %s is online.", motor_devices[id]->name);
 	}
+	motor_link_observe_reply(&data->online, &data->missed_times);
 	struct mi_can_id *can_id = (struct mi_can_id *)&(frame->id);
 	if (can_id->mi_msg_mode == Communication_Type_MotorFeedback) {
 		data->err = ((can_id->data) >> 8) & 0x3f;
@@ -305,7 +308,8 @@ void mi_rx_data_handler(struct k_work *work)
 
 		float prev_angle = data->common.angle;
 		data->common.angle =
-			(uint16_to_float(data->RAWangle, (double)P_MIN, (double)P_MAX, 16))*RAD2DEG;
+			(uint16_to_float(data->RAWangle, (double)P_MIN, (double)P_MAX, 16)) *
+			RAD2DEG;
 		data->common.rpm =
 			RADPS2RPM(uint16_to_float(data->RAWrpm, (double)V_MIN, (double)V_MAX, 16));
 		data->common.torque =
@@ -325,8 +329,6 @@ void mi_tx_isr_handler(struct k_timer *dummy)
 void mi_isr_init_handler(struct k_timer *dummy)
 {
 	dummy->expiry_fn = mi_tx_isr_handler;
-	k_work_queue_start(&mi_work_queue, mi_work_queue_stack, CAN_SEND_STACK_SIZE,
-			   CAN_SEND_PRIORITY, NULL);
 	k_work_submit_to_queue(&mi_work_queue, &mi_init_work);
 }
 
@@ -340,33 +342,22 @@ void mi_tx_data_handler(struct k_work *work)
 		struct mi_motor_data *data = motor_devices[i]->data;
 		const struct mi_motor_cfg *cfg = motor_devices[i]->config;
 		if (data->enabled) {
-			if (data->missed_times > 600) {
+			if (motor_link_note_missed_reply(&data->online, data->enabled,
+							 &data->missed_times, 600)) {
 				LOG_ERR("Motor %s is not responding, setting it to offline.",
 					motor_devices[i]->name);
-				data->missed_times = 0;
-				// struct can_frame frame = {0};
-				// frame.flags = CAN_FRAME_IDE;
-				// frame.dlc = 8;
-				// struct mi_can_id *mi_can_id = (struct mi_can_id *)&(frame.id);
-				// mi_can_id->id = cfg->common.id;
-				// mi_can_id->mi_msg_mode = Communication_Type_MotorEnable;
-				// data->online = true;
-				// data->enabled = true;
-				// data->missed_times = 0;
 			}
 			mi_motor_pack(motor_devices[i], tx_frame);
 
-			motor_can_sched_send_reply(
-				cfg->common.phy, &tx_frame[0],
-				(Communication_Type_MotorFeedback << 24) |
-					((cfg->common.id & 0xFF) << 8),
-				0x1F00FF00, 5U, "mi-control");
+			motor_can_sched_send_reply(cfg->common.phy, &tx_frame[0],
+						   (Communication_Type_MotorFeedback << 24) |
+							   ((cfg->common.id & 0xFF) << 8),
+						   0x1F00FF00, 5U, "mi-control");
 
 			if ((data->common.mode == PV) || (data->common.mode == VO)) {
 				motor_can_sched_send_prio(cfg->common.phy, &tx_frame[1], true,
 							  "mi-follow");
 			}
-			data->missed_times++;
 		}
 		if (i % 2 == 1) {
 			k_usleep(500);
@@ -418,6 +409,9 @@ int mi_get(const struct device *dev, motor_status_t *status)
 	status->speed_limit[1] = V_MIN;
 	status->torque_limit[0] = T_MAX;
 	status->torque_limit[1] = T_MIN;
+	status->online = data->online;
+	status->enabled = data->enabled;
+	status->error = data->err;
 
 	return 0;
 }
@@ -471,7 +465,8 @@ int mi_set(const struct device *dev, motor_setpoint_t *status)
 	}
 	if (status->mode == MIT) {
 		for (int i = 0; i < motor_get_controller_count(dev); i++) {
-			const struct motor_controller_config *ctrl_cfg = &cfg->common.controllers[i];
+			const struct motor_controller_config *ctrl_cfg =
+				&cfg->common.controllers[i];
 
 			if (ctrl_cfg->param_count == 0) {
 				break;

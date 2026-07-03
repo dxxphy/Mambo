@@ -2,12 +2,12 @@
 #include "zephyr/device.h"
 #include "zephyr/drivers/can.h"
 #include "../common/common.h"
+#include "../common/motor_link.h"
 #include "../common/motor_can_sched.h"
 #include "zephyr/drivers/motor.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
-#include <sys/_stdint.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
@@ -135,15 +135,13 @@ void rs_motor_control(const struct device *dev, enum motor_cmd cmd)
 		frame.id = *(uint32_t *)&id;
 		frame.data[0] = 0x0;
 		motor_can_sched_send_prio(cfg->common.phy, &frame, true, "rs-enable");
-		data->enabled = true;
-		data->online = true;
-		data->missed_times = 0;
+		motor_link_request_enable(&data->enabled, &data->missed_times);
 		break;
 	case DISABLE_MOTOR:
 		id.msg_type = Communication_Type_MotorStop;
 		frame.id = *(uint32_t *)&id;
 		motor_can_sched_send_prio(cfg->common.phy, &frame, true, "rs-disable");
-		data->enabled = false;
+		motor_link_request_disable(&data->online, &data->enabled, &data->missed_times);
 		break;
 	case SET_ZERO:
 		id.msg_type = Communication_Type_SetPosZero;
@@ -277,8 +275,6 @@ static void rs_can_rx_handler(const struct device *can_dev, struct can_frame *fr
 	const struct rs_motor_cfg *cfg = dev->config;
 	struct rs_can_id *can_id = (struct rs_can_id *)&(frame->id);
 
-	data->missed_times = 0;
-
 	if (can_id->msg_type == Communication_Type_MotorFeedback ||
 	    can_id->msg_type == Communication_Type_MotorReport) {
 		data->err = (can_id->reserved) & 0x3f;
@@ -290,10 +286,12 @@ static void rs_can_rx_handler(const struct device *can_dev, struct can_frame *fr
 		data->RAWtorque = (frame->data[4] << 8) | (frame->data[5]);
 		data->RAWtemp = (frame->data[6] << 8) | (frame->data[7]);
 		if (!data->online) {
-			data->target_pos = uint16_to_float(data->RAWangle, -cfg->p_max,
-							   cfg->p_max, 16);
-			data->online = true;
+			data->target_pos =
+				uint16_to_float(data->RAWangle, -cfg->p_max, cfg->p_max, 16);
+			motor_link_observe_reply(&data->online, &data->missed_times);
 			LOG_INF("Motor %s is online.", dev->name);
+		} else {
+			motor_link_observe_reply(&data->online, &data->missed_times);
 		}
 	}
 }
@@ -312,20 +310,16 @@ void rs_tx_data_handler(struct k_work *work)
 		const struct rs_motor_cfg *cfg = motor_devices[i]->config;
 
 		if (data->enabled) {
-			if (data->missed_times > 100 && data->online) {
+			if (motor_link_note_missed_reply(&data->online, data->enabled,
+							 &data->missed_times, 100)) {
 				LOG_ERR("Motor %s is not responding, setting it to offline.",
 					motor_devices[i]->name);
-				data->online = false;
 			}
 			rs_motor_pack(motor_devices[i], &tx_frame);
-			motor_can_sched_send_reply(
-				cfg->common.phy, &tx_frame,
-				(Communication_Type_MotorFeedback << 24) |
-					((cfg->common.tx_id & 0xFF) << 8),
-				0x1F00FF00, 5U, "rs-control");
-			if (data->missed_times < INT16_MAX) {
-				data->missed_times++;
-			}
+			motor_can_sched_send_reply(cfg->common.phy, &tx_frame,
+						   (Communication_Type_MotorFeedback << 24) |
+							   ((cfg->common.tx_id & 0xFF) << 8),
+						   0x1F00FF00, 5U, "rs-control");
 		}
 	}
 }
@@ -335,16 +329,17 @@ int rs_get(const struct device *dev, motor_status_t *status)
 	struct rs_motor_data *data = dev->data;
 	const struct rs_motor_cfg *cfg = dev->config;
 
+	status->online = data->online;
+	status->enabled = data->enabled;
+	status->error = data->err;
+
 	if (!data->online) {
 		return -ENODEV;
 	}
 
-	data->common.angle = RAD2DEG * uint16_to_float(data->RAWangle, -cfg->p_max,
-						       cfg->p_max, 16);
-	data->common.rpm = RADPS2RPM(
-		uint16_to_float(data->RAWrpm, -cfg->v_max, cfg->v_max, 16));
-	data->common.torque =
-		uint16_to_float(data->RAWtorque, -cfg->t_max, cfg->t_max, 16);
+	data->common.angle = RAD2DEG * uint16_to_float(data->RAWangle, -cfg->p_max, cfg->p_max, 16);
+	data->common.rpm = RADPS2RPM(uint16_to_float(data->RAWrpm, -cfg->v_max, cfg->v_max, 16));
+	data->common.torque = uint16_to_float(data->RAWtorque, -cfg->t_max, cfg->t_max, 16);
 	data->common.temperature = ((float)(data->RAWtemp)) / 10.0f;
 
 	status->angle = data->common.angle;

@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+
+description: Test CAN controller used by native_sim motor driver simulation tests.
+
+compatible: "ares,test-can"
+
+include: can-controller.yaml

@@ -1,0 +1,68 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	chosen {
+		zephyr,canbus = &fake_can;
+	};
+
+	fake_can: fake_can {
+		compatible = "ares,test-can";
+		status = "okay";
+		bitrate = <1000000>;
+	};
+
+	dm0: dm0 {
+		compatible = "dm,motor";
+		status = "okay";
+		id = <1>;
+		tx_id = <0x01>;
+		rx_id = <0x11>;
+		can_channel = <&fake_can>;
+		v_max = "12.5";
+		p_max = "12.5";
+		t_max = "12.0";
+		freq = <500>;
+	};
+
+	mi0: mi0 {
+		compatible = "mi,motor";
+		status = "okay";
+		id = <2>;
+		tx_id = <0x02>;
+		rx_id = <0x02>;
+		can_channel = <&fake_can>;
+		gear_ratio = "1.0";
+	};
+
+	rs0: rs0 {
+		compatible = "rs,motor";
+		status = "okay";
+		id = <3>;
+		tx_id = <0x03>;
+		rx_id = <0x00>;
+		can_channel = <&fake_can>;
+		motor_type = "RS02";
+	};
+
+	lk0: lk0 {
+		compatible = "lk,motor";
+		status = "okay";
+		id = <4>;
+		tx_id = <0x04>;
+		rx_id = <0x04>;
+		can_channel = <&fake_can>;
+	};
+
+	dji0: dji0 {
+		compatible = "dji,motor";
+		status = "okay";
+		id = <5>;
+		tx_id = <0x200>;
+		rx_id = <0x205>;
+		can_channel = <&fake_can>;
+		gear_ratio = "1.0";
+		is_m3508;
+	};
+};

@@ -18,12 +18,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
-#include <sys/_types.h>
 #include <sys/types.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/time_units.h>
 #include "../common/common.h"
+#include "../common/motor_link.h"
 #include "../common/motor_can_sched.h"
 
 #define DT_DRV_COMPAT dji_motor
@@ -263,7 +263,6 @@ void dji_control(const struct device *dev, enum motor_cmd cmd)
 
 	switch (cmd) {
 	case ENABLE_MOTOR:
-		data->online = true;
 		break;
 	case DISABLE_MOTOR:
 		data->online = false;
@@ -279,14 +278,13 @@ void dji_control(const struct device *dev, enum motor_cmd cmd)
 			frame.data[1] = (cfg->common.rx_id - 0x200) >> 8;
 			frame.data[2] = 0x55;
 			frame.data[3] = 0x3C;
-				motor_can_sched_send_prio(cfg->common.phy, &frame, true, "dji-set-zero");
+			motor_can_sched_send_prio(cfg->common.phy, &frame, true, "dji-set-zero");
 		}
 		break;
 	case CLEAR_CONTROLLER:
 		break;
 	case CLEAR_ERROR:
 		data->missed_times = 0;
-		data->online = true;
 		if (cfg->is_dm_motor) {
 			frame.id = 0x7FF;
 			frame.flags = 0;
@@ -295,7 +293,7 @@ void dji_control(const struct device *dev, enum motor_cmd cmd)
 			frame.data[1] = (cfg->common.rx_id - 0x200) >> 8;
 			frame.data[2] = 0x55;
 			frame.data[3] = 0x50;
-				motor_can_sched_send_prio(cfg->common.phy, &frame, true, "dji-clear-error");
+			motor_can_sched_send_prio(cfg->common.phy, &frame, true, "dji-clear-error");
 		}
 		break;
 	}
@@ -347,14 +345,13 @@ int dji_init(const struct device *dev)
 		} else {
 			data->ctrl_struct->mask[frame_id] |= 1 << id;
 		}
-			if (data->ctrl_struct->rx_ids[id]) {
-				motor_stats_inc(MOTOR_STAT_CONFIG_ERROR);
-			}
+		if (data->ctrl_struct->rx_ids[id]) {
+			motor_stats_inc(MOTOR_STAT_CONFIG_ERROR);
+		}
 		data->ctrl_struct->rx_ids[id] = cfg->common.rx_id;
 
 		data->ctrl_struct->full_handle.handler = dji_tx_handler;
 
-		data->online = true;
 		data->ctrl_struct->motor_devs[id] = (struct device *)dev;
 		data->prev_time = 0;
 		data->ctrl_struct->flags = 0;
@@ -367,15 +364,17 @@ int dji_init(const struct device *dev)
 			data->convert_num = M2006_CONVERT_NUM;
 		} else if (cfg->is_dm_motor) {
 			data->convert_num = DM_MOTOR_CONVERT_NUM;
-			} else {
-				motor_stats_inc(MOTOR_STAT_CONFIG_ERROR);
-			}
+		} else {
+			motor_stats_inc(MOTOR_STAT_CONFIG_ERROR);
+		}
 
 		if (!device_is_ready(cfg->common.phy)) {
 			return -1;
 		}
 		if (dji_miss_handle_timer.expiry_fn == NULL) {
 			k_work_queue_init(&dji_work_queue);
+			k_work_queue_start(&dji_work_queue, dji_work_queue_stack,
+					   CAN_SEND_STACK_SIZE, CAN_SEND_PRIORITY, NULL);
 			k_tid_t thread = k_work_queue_thread_get(&dji_work_queue);
 			k_thread_name_set(thread, "dji_motor_ctrl_thread");
 			k_timer_init(&dji_miss_handle_timer, dji_init_isr_handler, NULL);
@@ -400,9 +399,9 @@ void can_rx_callback(const struct device *can_dev, struct can_frame *frame, void
 	}
 	motor_can_sched_report_rx(can_dev, frame);
 
-	if (data->missed_times > 3) {
-		data->missed_times = 0;
-		data->online = true;
+	bool was_timed_out = data->missed_times > 3;
+
+	if (motor_link_observe_periodic_report(&data->online, &data->missed_times)) {
 		const struct dji_motor_config *motor_cfg =
 			(const struct dji_motor_config *)dev->config;
 		int8_t frame_id = frameID_to_index(motor_cfg->common.tx_id);
@@ -411,12 +410,12 @@ void can_rx_callback(const struct device *can_dev, struct can_frame *frame, void
 			    ((const struct dji_motor_config *)motor_cfg->follow->config)
 				    ->common.phy) {
 			data->ctrl_struct->mask[frame_id] |= 1 << motor_id(motor_cfg->follow);
-			} else {
-				data->ctrl_struct->mask[frame_id] |= 1 << id;
-			}
+		} else {
+			data->ctrl_struct->mask[frame_id] |= 1 << id;
+		}
+		if (was_timed_out) {
 			motor_stats_inc(MOTOR_STAT_DRIVER_ERROR);
-		} else if (data->missed_times > 0) {
-		data->missed_times--;
+		}
 	}
 
 	// Store in RAW data. Process when API is called.
@@ -523,8 +522,7 @@ static void dji_timeout_handle(const struct device *dev, uint32_t curr_time)
 	}
 	uint32_t prev_time = data->curr_time;
 	if (k_cyc_to_us_near32(curr_time - prev_time) > 2000 || curr_time - prev_time > 100000) {
-		data->missed_times++;
-		if (data->missed_times > 3) {
+		if (motor_link_note_periodic_timeout(&data->online, &data->missed_times, 3)) {
 			LOG_ERR("Motor \"%s\" on canbus \"%s\" is not responding", dev->name,
 				cfg->common.phy->name);
 			if (cfg->follow &&
@@ -537,7 +535,6 @@ static void dji_timeout_handle(const struct device *dev, uint32_t curr_time)
 				data->ctrl_struct->mask[frameID_to_index(cfg->common.tx_id)] &=
 					~(1 << motor_id(dev));
 			}
-			data->online = false;
 		}
 	}
 }
@@ -596,24 +593,28 @@ static void motor_calc(const struct device *dev)
 
 	const struct motor_controller_config *ctrl_cfg =
 		&config->common.controllers[data->current_mode_index];
-	struct motor_controller_data *ctrl_data = &data->common.controllers[data->current_mode_index];
+	struct motor_controller_data *ctrl_data =
+		&data->common.controllers[data->current_mode_index];
 	struct motor_controller_input input = {
-		.status = {
-			.angle = data->common.angle,
-			.rpm = data->common.rpm,
-			.torque = data->common.torque,
-			.sum_angle = data->common.sum_angle,
-		},
-		.setpoint = {
-			.angle = data->target_angle,
-			.rpm = data->target_rpm,
-			.torque = data->target_torque_ff,
-			.speed_limit = {data->common.speed_limit[0], data->common.speed_limit[1]},
-			.torque_limit = {data->common.torque_limit[0],
-					 data->common.torque_limit[1]},
-			.mode = data->common.mode,
-			.target = data->common.target,
-		},
+		.status =
+			{
+				.angle = data->common.angle,
+				.rpm = data->common.rpm,
+				.torque = data->common.torque,
+				.sum_angle = data->common.sum_angle,
+			},
+		.setpoint =
+			{
+				.angle = data->target_angle,
+				.rpm = data->target_rpm,
+				.torque = data->target_torque_ff,
+				.speed_limit = {data->common.speed_limit[0],
+						data->common.speed_limit[1]},
+				.torque_limit = {data->common.torque_limit[0],
+						 data->common.torque_limit[1]},
+				.mode = data->common.mode,
+				.target = data->common.target,
+			},
 		.position_error = data->position_error,
 		.has_position_error = true,
 		.timestamp = data->curr_time,
@@ -636,9 +637,9 @@ torque2current:
 		data->target_current = data->target_torque / config->gear_ratio *
 				       convert[data->convert_num][TORQUE2CURRENT];
 	} else {
-		data->target_current = data->target_torque * 16384.0f /
-				       (config->dm_torque_ratio * config->dm_i_max *
-					config->gear_ratio);
+		data->target_current =
+			data->target_torque * 16384.0f /
+			(config->dm_torque_ratio * config->dm_i_max * config->gear_ratio);
 	}
 	k_spin_unlock(&data->data_input_lock, key);
 }
@@ -652,8 +653,6 @@ void dji_miss_isr_handler(struct k_timer *dummy)
 void dji_init_isr_handler(struct k_timer *dummy)
 {
 	ARG_UNUSED(dummy);
-	k_work_queue_start(&dji_work_queue, dji_work_queue_stack, CAN_SEND_STACK_SIZE,
-			   CAN_SEND_PRIORITY, NULL);
 	k_work_submit_to_queue(&dji_work_queue, &dji_init_handle);
 }
 
@@ -678,12 +677,12 @@ void dji_init_handler(struct k_work *work)
 				.mask = 0x7FF,
 				.flags = 0,
 			};
-				int err = can_add_rx_filter(cfg->common.phy, can_rx_callback,
-							    (void *)motor_devices[i], &filter);
-				if (err < 0) {
-					motor_stats_inc(MOTOR_STAT_CAN_FILTER_ERROR);
-				}
+			int err = can_add_rx_filter(cfg->common.phy, can_rx_callback,
+						    (void *)motor_devices[i], &filter);
+			if (err < 0) {
+				motor_stats_inc(MOTOR_STAT_CAN_FILTER_ERROR);
 			}
+		}
 	}
 	dji_miss_handle_timer.expiry_fn = dji_miss_isr_handler;
 	k_timer_start(&dji_miss_handle_timer, K_NO_WAIT, K_MSEC(4));
@@ -722,15 +721,15 @@ void dji_tx_handler(struct k_work *work)
 					packed = true;
 				}
 			}
-				if (packed) {
-					txframe.id = index_to_frameID(i);
-					txframe.dlc = 8;
-					txframe.flags = 0;
-					const struct device *can_dev = ctrl_struct->can_dev;
-					motor_can_sched_send_prio(can_dev, &txframe, true,
-								  "dji-feedback-control");
-				}
+			if (packed) {
+				txframe.id = index_to_frameID(i);
+				txframe.dlc = 8;
+				txframe.flags = 0;
+				const struct device *can_dev = ctrl_struct->can_dev;
+				motor_can_sched_send_prio(can_dev, &txframe, true,
+							  "dji-feedback-control");
 			}
+		}
 	}
 }
 
