@@ -179,7 +179,7 @@ void chassis_thread_entry(void *arg1, void *arg2, void *arg3)
 	}
 
 	while (1) {
-		k_sem_take(&chassis_sem, K_MSEC(5));
+		k_sem_take(&chassis_sem, K_FOREVER);
 		data->prevTime = data->currTime;
 		data->currTime = k_cycle_get_32();
 
