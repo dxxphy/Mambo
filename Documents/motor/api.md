@@ -6,9 +6,9 @@
 - `motor_status_t`: 驱动回读的当前状态。
 - `motor_controller_info_t`: 驱动声明的控制器。
 
-`motor_set()` 是一次原子操作：控制器选择和目标量一起下发。用户可以让驱动按 `(mode, target)` 选择默认控制器，也可以显式指定 controller ID。
+`motor_set()` 是一次原子操作：控制器选择和目标量一起下发。用户可以让驱动按 `(mode, target)` 选择默认控制器，也可以显式指定控制器 ID。
 
-电机驱动只和 controller 契约交互：把 `motor_status_t` 和 `motor_setpoint_t` 组成输入交给 controller，controller 输出驱动可执行的控制量；对 DM、MI、RS、LK 这类原生闭环电机，驱动只从 controller 读取协议需要的参数并发送给电机。
+电机驱动只和控制器契约交互：把 `motor_status_t` 和 `motor_setpoint_t` 组成输入交给控制器，控制器输出驱动可执行的控制量；对 DM、MI、RS、LK 这类原生闭环电机，驱动只从控制器读取协议需要的参数并发送给电机。
 
 ```c
 struct motor_driver_api {
@@ -70,9 +70,9 @@ struct motor_controller_info {
 };
 ```
 
-`required_states` 声明 controller 需要驱动提供哪些状态量，`output` 声明 controller 输出量类型。这样后续接 ADRC、MPC 等更高级 controller 时，可以继续复用同一套声明和选择接口。
+`required_states` 声明控制器需要驱动提供哪些状态量，`output` 声明控制器输出量类型。这样后续接 ADRC、MPC 等更高级控制器时，可以继续复用同一套声明和选择接口。
 
-controller 的执行接口：
+控制器的执行接口：
 
 ```c
 int motor_controller_update(struct motor_controller_data *data,
@@ -122,7 +122,7 @@ struct motor_status {
 };
 ```
 
-`PV + MOTOR_TARGET_POSITION` 和 `VO + MOTOR_TARGET_SPEED` 中的 `torque` 字段作为力矩前馈使用。只有控制器输出为力矩、且驱动支持叠加前馈时才会生效；例如 DJI 级联控制器会把该值加到速度环输出后的目标力矩上。`VO + MOTOR_TARGET_TORQUE` 则表示直接扭矩目标，不需要 controller 节点。
+`PV + MOTOR_TARGET_POSITION` 和 `VO + MOTOR_TARGET_SPEED` 中的 `torque` 字段作为力矩前馈使用。只有控制器输出为力矩、且驱动支持叠加前馈时才会生效；例如 DJI 级联控制器会把该值加到速度环输出后的目标力矩上。`VO + MOTOR_TARGET_TORQUE` 则表示直接扭矩目标，不需要控制器节点。
 
 ## 示例
 
