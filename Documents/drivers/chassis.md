@@ -55,7 +55,7 @@
 
 `drivers/chassis/chassis.c` 中的求解器会在进入轮速解析前，将该坐标系内部旋转到自身定义的前进/右向坐标系。
 
-`chassis_set_angle()` 启用基于配置 PID 的闭环偏航控制。  
+`chassis_set_angle()` 启用基于配置 PID 的闭环偏航控制。
 `chassis_set_gyro()` 关闭角度控制并直接下发角速度。
 
 `chassis_set_static()` 请求静态轮对齐。其会清除平移目标，并在内部设定速度未降到硬编码阈值前返回 `-EBUSY`。

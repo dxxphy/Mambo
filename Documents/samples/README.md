@@ -2,15 +2,15 @@
 
 本目录按样例域维护文档入口：
 
-- [motor.md](motor.md)  
+- [motor.md](motor.md)
   电机/执行机构链路验证样例
-- [communication.md](communication.md)  
+- [communication.md](communication.md)
   ARES 通信与 Plotter 协议样例
-- [imu.md](imu.md)  
+- [imu.md](imu.md)
   IMU 姿态与加速度计标定样例
-- [chassis.md](chassis.md)  
+- [chassis.md](chassis.md)
   以 SBUS 控制为入口的底盘样例
-- [vcan.md](vcan.md)  
+- [vcan.md](vcan.md)
   双通道 SPI-CAN 桥接样例
 
 样例目录即构建入口名：
