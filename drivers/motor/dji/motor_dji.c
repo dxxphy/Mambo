@@ -655,7 +655,9 @@ static void motor_calc(const struct device *dev)
 
 	if (motor_controller_update(ctrl_data, ctrl_cfg, &input, &output) == 0 &&
 	    output.type == MOTOR_OUTPUT_TORQUE) {
-		data->target_rpm = output.speed;
+		if (output.fields & MOTOR_CONTROLLER_OUTPUT_SPEED) {
+			data->target_rpm = output.speed;
+		}
 		data->target_torque = output.value;
 	}
 

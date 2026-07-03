@@ -96,6 +96,11 @@ enum motor_output_type {
 	MOTOR_OUTPUT_NATIVE = 5,
 };
 
+enum motor_controller_output_field {
+	MOTOR_CONTROLLER_OUTPUT_VALUE = BIT(0),
+	MOTOR_CONTROLLER_OUTPUT_SPEED = BIT(1),
+};
+
 /**
  * @brief 电机控制命令枚举
  */
@@ -226,6 +231,7 @@ struct motor_controller_input {
 
 struct motor_controller_output {
 	enum motor_output_type type;
+	uint32_t fields;
 	float value;
 	float speed;
 };
@@ -343,6 +349,7 @@ static inline int motor_builtin_controller_update(struct motor_controller_data *
 
 	*output = (struct motor_controller_output){
 		.type = cfg->info.output,
+		.fields = 0,
 		.value = 0,
 		.speed = 0,
 	};
@@ -367,6 +374,7 @@ static inline int motor_builtin_controller_update(struct motor_controller_data *
 							      input->timestamp);
 		target_torque += input->setpoint.torque;
 		output->type = MOTOR_OUTPUT_TORQUE;
+		output->fields = MOTOR_CONTROLLER_OUTPUT_VALUE | MOTOR_CONTROLLER_OUTPUT_SPEED;
 		output->value = target_torque;
 		output->speed = target_speed;
 		return 0;
@@ -381,12 +389,14 @@ static inline int motor_builtin_controller_update(struct motor_controller_data *
 			input->timestamp);
 		target_torque += input->setpoint.torque;
 		output->type = MOTOR_OUTPUT_TORQUE;
+		output->fields = MOTOR_CONTROLLER_OUTPUT_VALUE;
 		output->value = target_torque;
 		return 0;
 	}
 
 	if (cfg->info.mode == VO && cfg->info.target == MOTOR_TARGET_TORQUE) {
 		output->type = MOTOR_OUTPUT_TORQUE;
+		output->fields = MOTOR_CONTROLLER_OUTPUT_VALUE;
 		output->value = input->setpoint.torque;
 		return 0;
 	}
