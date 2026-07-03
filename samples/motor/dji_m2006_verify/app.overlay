@@ -1,0 +1,36 @@
+/ {
+	speed_pid_m2006: speed_pid_m2006 {
+		compatible = "motor-controller,vo";
+		target = "speed";
+		k_p = "4.0";
+		k_i = "0.15";
+		k_d = "0.0";
+		i_max = "0.18";
+		out_max = "0.25";
+	};
+
+	angle_pid_m2006: angle_pid_m2006 {
+		compatible = "motor-controller,pv";
+		pos_k_p = "1.5";
+		pos_k_i = "0.0";
+		pos_k_d = "0.0";
+		pos_out_max = "30.0";
+		vel_k_p = "4.0";
+		vel_k_i = "0.15";
+		vel_k_d = "0.0";
+		vel_i_max = "0.18";
+		vel_out_max = "0.25";
+	};
+
+	m2006_motor: m2006_motor {
+		compatible = "dji,motor";
+		is_m2006;
+		id = <1>;
+		rx_id = <0x201>;
+		tx_id = <0x200>;
+		gear_ratio = "36.0";
+		status = "okay";
+		can_channel = <&can1>;
+		controllers = <&angle_pid_m2006 &speed_pid_m2006>;
+	};
+};
