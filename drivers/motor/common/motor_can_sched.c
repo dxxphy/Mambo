@@ -142,8 +142,13 @@ static struct motor_can_sched_meta meta_from_param(const struct device *can_dev,
 		return meta;
 	}
 
-	meta.priority = param->high_priority ? MOTOR_CAN_SCHED_PRIO_HIGH : MOTOR_CAN_SCHED_PRIO_LOW;
 	meta.expect_reply = param->track_reply;
+	if (param->high_priority) {
+		meta.priority = param->track_reply ? MOTOR_CAN_SCHED_PRIO_HIGH
+						   : MOTOR_CAN_SCHED_PRIO_CRITICAL;
+	} else {
+		meta.priority = MOTOR_CAN_SCHED_PRIO_LOW;
+	}
 	meta.trace_lifecycle = param->trace_lifecycle;
 	meta.reply_reserve_us = param->immediate_reply ? frame_airtime_us(can_dev, frame) : 0U;
 	meta.ack_timeout_ms = param->ack_timeout_ms != 0U ? param->ack_timeout_ms : 5U;

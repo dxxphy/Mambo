@@ -384,7 +384,7 @@ int dji_init(const struct device *dev)
 		}
 		data->ctrl_struct->rx_ids[id] = cfg->common.rx_id;
 
-		data->ctrl_struct->full_handle.handler = dji_tx_handler;
+		k_work_init(&data->ctrl_struct->full_handle, dji_tx_handler);
 
 		data->ctrl_struct->motor_devs[id] = (struct device *)dev;
 		data->prev_time = 0;

@@ -436,7 +436,8 @@ void dm_tx_data_handler(struct k_work *work)
 						  "dm-clear-error");
 			}
 		}
-		if (now - data->last_tx_time >= 1000 / cfg->freq) {
+		if (data->common.link.requested_enabled &&
+		    now - data->last_tx_time >= 1000 / cfg->freq) {
 			dm_motor_pack(motor_devices[i], &tx_frame);
 			motor_can_sched_send_reply(cfg->common.phy, &tx_frame,
 						   cfg->common.rx_id & 0xFF, CAN_STD_ID_MASK, 5U,
