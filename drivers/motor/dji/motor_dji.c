@@ -12,6 +12,7 @@
 #include "zephyr/spinlock.h"
 #include "zephyr/sys/util.h"
 #include "zephyr/toolchain.h"
+#include <errno.h>
 #include <string.h>
 #include <math.h>
 #include <soc.h>
@@ -115,6 +116,37 @@ static int16_t to16t(float value)
 
 struct motor_controller ctrl_structs[CONFIG_CAN_COUNT] = {
 	LISTIFY(CONFIG_CAN_COUNT, CTRL_STRUCT_DATA, (, ))};
+
+static struct motor_controller *dji_ctrl_for_can(const struct device *can_dev,
+						 canbus_id_t *canbus_id)
+{
+	struct motor_controller *free_ctrl = NULL;
+	canbus_id_t free_id = 0U;
+
+	for (canbus_id_t i = 0; i < CONFIG_CAN_COUNT; i++) {
+		if (ctrl_structs[i].can_dev == (struct device *)can_dev) {
+			if (canbus_id != NULL) {
+				*canbus_id = i;
+			}
+			return &ctrl_structs[i];
+		}
+		if ((ctrl_structs[i].can_dev == NULL) && (free_ctrl == NULL)) {
+			free_ctrl = &ctrl_structs[i];
+			free_id = i;
+		}
+	}
+
+	if (free_ctrl == NULL) {
+		return NULL;
+	}
+
+	free_ctrl->can_dev = (struct device *)can_dev;
+	motor_can_sched_register_can(can_dev);
+	if (canbus_id != NULL) {
+		*canbus_id = free_id;
+	}
+	return free_ctrl;
+}
 
 static inline motor_id_t motor_id(const struct device *dev)
 {
@@ -265,7 +297,7 @@ void dji_control(const struct device *dev, enum motor_cmd cmd)
 	case ENABLE_MOTOR:
 		break;
 	case DISABLE_MOTOR:
-		data->online = false;
+		motor_link_request_disable(&data->common.link);
 		break;
 	case SET_ZERO:
 		data->angle_add = 0;
@@ -284,7 +316,7 @@ void dji_control(const struct device *dev, enum motor_cmd cmd)
 	case CLEAR_CONTROLLER:
 		break;
 	case CLEAR_ERROR:
-		data->missed_times = 0;
+		data->common.link.missed = 0;
 		if (cfg->is_dm_motor) {
 			frame.id = 0x7FF;
 			frame.flags = 0;
@@ -315,8 +347,8 @@ int dji_get(const struct device *dev, motor_status_t *status)
 	status->mode = data->common.mode;
 	status->target = data->common.target;
 	status->controller_id = data->common.controller_id;
-	status->online = data->online;
-	status->enabled = data->online;
+	status->online = data->common.link.online;
+	status->enabled = data->common.link.online;
 	status->error = 0;
 
 	return 0;
@@ -332,9 +364,11 @@ int dji_init(const struct device *dev)
 	if (dev) {
 		const struct dji_motor_config *cfg = dev->config;
 		struct dji_motor_data *data = dev->data;
-		data->canbus_id = reg_can_dev(cfg->common.phy);
-		data->ctrl_struct = &ctrl_structs[data->canbus_id];
-		data->ctrl_struct->can_dev = (struct device *)cfg->common.phy;
+		data->ctrl_struct = dji_ctrl_for_can(cfg->common.phy, &data->canbus_id);
+		if (data->ctrl_struct == NULL) {
+			motor_stats_inc(MOTOR_STAT_CONFIG_ERROR);
+			return -ENOMEM;
+		}
 		uint8_t frame_id = frameID_to_index(cfg->common.tx_id);
 		uint8_t id = motor_id(dev);
 		if (cfg->follow &&
@@ -399,9 +433,9 @@ void can_rx_callback(const struct device *can_dev, struct can_frame *frame, void
 	}
 	motor_can_sched_report_rx(can_dev, frame);
 
-	bool was_timed_out = data->missed_times > 3;
+	bool was_timed_out = data->common.link.missed > 3;
 
-	if (motor_link_observe_periodic_report(&data->online, &data->missed_times)) {
+	if (motor_link_observe_periodic_report(dev, &data->common.link)) {
 		const struct dji_motor_config *motor_cfg =
 			(const struct dji_motor_config *)dev->config;
 		int8_t frame_id = frameID_to_index(motor_cfg->common.tx_id);
@@ -517,14 +551,12 @@ static void dji_timeout_handle(const struct device *dev, uint32_t curr_time)
 	struct dji_motor_data *data = (struct dji_motor_data *)dev->data;
 	const struct dji_motor_config *cfg = (const struct dji_motor_config *)dev->config;
 
-	if (data->online == false) {
+	if (data->common.link.online == false) {
 		return;
 	}
 	uint32_t prev_time = data->curr_time;
 	if (k_cyc_to_us_near32(curr_time - prev_time) > 2000 || curr_time - prev_time > 100000) {
-		if (motor_link_note_periodic_timeout(&data->online, &data->missed_times, 3)) {
-			LOG_ERR("Motor \"%s\" on canbus \"%s\" is not responding", dev->name,
-				cfg->common.phy->name);
+		if (motor_link_note_periodic_timeout(dev, &data->common.link, 3)) {
 			if (cfg->follow &&
 			    cfg->common.phy ==
 				    ((const struct dji_motor_config *)cfg->follow->config)
@@ -576,7 +608,7 @@ static void motor_calc(const struct device *dev)
 			motor_calc(follow_dev);
 			follow_data->calculated = true;
 			data->target_torque = follow_data->target_torque;
-		} else if (follow_data->online) {
+		} else if (follow_data->common.link.online) {
 			data->target_torque = follow_data->target_torque;
 		} else {
 			data->target_torque = 0;
@@ -711,7 +743,7 @@ void dji_tx_handler(struct k_work *work)
 				}
 				const struct device *dev = ctrl_struct->motor_devs[id_temp];
 				struct dji_motor_data *data = dev->data;
-				if (id_temp < 8 && data->online) {
+				if (id_temp < 8 && data->common.link.online) {
 					if (!data->calculated) {
 						motor_calc(ctrl_struct->motor_devs[id_temp]);
 						data->calculated = true;

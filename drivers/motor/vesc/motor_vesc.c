@@ -9,12 +9,12 @@
 #include "zephyr/device.h"
 #include "zephyr/drivers/can.h"
 #include "../common/common.h"
+#include "../common/motor_link.h"
 #include "../common/motor_can_sched.h"
 #include "zephyr/drivers/motor.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
-#include <sys/_stdint.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/time_units.h>
@@ -93,7 +93,7 @@ static void vesc_monitor_handler(struct k_work *work)
 		struct vesc_motor_data *data = vesc_motor_devices[i]->data;
 		const struct vesc_motor_config *cfg = vesc_motor_devices[i]->config;
 
-		if (!data->enable) {
+		if (!data->common.link.requested_enabled) {
 			continue;
 		}
 
@@ -102,10 +102,10 @@ static void vesc_monitor_handler(struct k_work *work)
 			data->last_ping_time = now;
 		}
 
-		if (data->online && now - data->prev_recv_time > vesc_offline_timeout_ms(cfg)) {
-			LOG_ERR("Motor %s is not responding, setting it to offline.",
-				vesc_motor_devices[i]->name);
-			data->online = false;
+		if (data->common.link.online &&
+		    now - data->prev_recv_time > vesc_offline_timeout_ms(cfg)) {
+			motor_link_mark_offline(vesc_motor_devices[i], &data->common.link,
+						MOTOR_TELEMETRY_REASON_RX_TIMEOUT);
 		}
 
 		k_sleep(K_USEC(130));
@@ -166,12 +166,11 @@ void vesc_motor_control(const struct device *dev, enum motor_cmd cmd)
 	struct vesc_motor_data *data = dev->data;
 	switch (cmd) {
 	case ENABLE_MOTOR:
-		data->enable = true;
-		data->online = true;
+		motor_link_request_enable(&data->common.link);
 		data->prev_recv_time = k_uptime_get();
 		break;
 	case DISABLE_MOTOR:
-		data->enable = false;
+		motor_link_request_disable(&data->common.link);
 		break;
 	case SET_ZERO:
 		break;
@@ -199,7 +198,7 @@ static void vesc_motor_pack(const struct device *dev, struct can_frame *frame)
 
 	frame->dlc = 8;
 	frame->flags = CAN_FRAME_IDE;
-	if (data->enable == true) {
+	if (data->common.link.requested_enabled) {
 		switch (data->common.mode) {
 		case VO:
 			if (data->common.target == MOTOR_TARGET_TORQUE) {
@@ -356,10 +355,7 @@ int vesc_set(const struct device *dev, motor_setpoint_t *status)
 
 static void vesc_mark_online(const struct device *dev, struct vesc_motor_data *data)
 {
-	if (!data->online) {
-		LOG_INF("Motor %s is online.", dev->name);
-	}
-	data->online = true;
+	motor_link_mark_online(dev, &data->common.link, MOTOR_TELEMETRY_REASON_REPLY);
 	data->prev_recv_time = k_uptime_get();
 }
 
@@ -424,6 +420,9 @@ int vesc_get(const struct device *dev, motor_status_t *status)
 	status->speed_limit[1] = -cfg->v_max;
 	status->torque_limit[0] = cfg->t_max;
 	status->torque_limit[1] = -cfg->t_max;
+	status->online = data->common.link.online;
+	status->enabled = data->common.link.requested_enabled;
+	status->error = data->err;
 
 	return 0;
 }

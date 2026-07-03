@@ -111,11 +111,11 @@ void dm_control(const struct device *dev, enum motor_cmd cmd)
 	switch (cmd) {
 	case ENABLE_MOTOR:
 		dm_send_cmd_frame(dev, enable_frame, "dm-enable");
-		motor_link_request_enable(&data->enable, NULL);
+		motor_link_request_enable(&data->common.link);
 		break;
 	case DISABLE_MOTOR:
 		dm_send_cmd_frame(dev, disable_frame, "dm-disable");
-		motor_link_request_disable(&data->online, &data->enable, NULL);
+		motor_link_request_disable(&data->common.link);
 		data->enabled = false;
 		break;
 	case SET_ZERO:
@@ -194,7 +194,7 @@ int dm_get(const struct device *dev, motor_status_t *status)
 	status->speed_limit[1] = cfg->v_max;
 	status->torque_limit[0] = cfg->t_max;
 	status->torque_limit[1] = cfg->t_max;
-	status->online = data->online;
+	status->online = data->common.link.online;
 	status->enabled = data->enabled;
 	status->error = data->err;
 	return 0;
@@ -221,10 +221,7 @@ static void dm_rx_handler(const struct device *can_dev, struct can_frame *frame,
 	data->RAWtorque = (frame->data[4] & 0xF) << 8;
 	data->update = true;
 
-	if (!data->online) {
-		LOG_INF("Motor %s is online.", dev->name);
-	}
-	motor_link_observe_reply(&data->online, NULL);
+	motor_link_observe_reply(dev, &data->common.link);
 
 	k_work_submit_to_queue(&dm_work_queue, &dm_rx_data_handle);
 }
@@ -273,7 +270,6 @@ static void dm_apply_controller_mode(const struct device *dev, enum motor_mode m
 		dm_edit_reg_value(cfg->common.phy, cfg->common.tx_id, 0x0A, 0x03);
 		break;
 	default:
-		data->online = false;
 		dm_control(dev, DISABLE_MOTOR);
 	}
 
@@ -308,7 +304,6 @@ static void dm_apply_controller_mode(const struct device *dev, enum motor_mode m
 		motor_stats_inc(MOTOR_STAT_UNSUPPORTED_MODE);
 		if (mode != VO) {
 			dm_control(dev, DISABLE_MOTOR);
-			data->enable = false;
 		}
 	} else if (mode == VO) {
 		union {
@@ -425,12 +420,13 @@ void dm_tx_data_handler(struct k_work *work)
 		struct dm_motor_data *data = motor_devices[i]->data;
 		const struct dm_motor_config *cfg = motor_devices[i]->config;
 
-		if (!data->online && data->enable &&
+		if (!data->common.link.online && data->common.link.requested_enabled &&
 		    data->tx_cnt >= DM_OFFLINE_ENABLE_RETRY_TX_COUNT) {
 			dm_send_cmd_frame(motor_devices[i], enable_frame, "dm-retry-enable");
 			data->tx_cnt = 0;
 		}
-		if (data->online && data->enable && data->tx_cnt >= 3) {
+		if (data->common.link.online && data->common.link.requested_enabled &&
+		    data->tx_cnt >= 3) {
 			if (!data->enabled) {
 				dm_send_cmd_frame(motor_devices[i], enable_frame, "dm-reenable");
 			}
@@ -448,11 +444,10 @@ void dm_tx_data_handler(struct k_work *work)
 			data->last_tx_time = now;
 			data->tx_cnt++;
 		}
-		if (now - data->prev_recv_time > 10000 / cfg->freq && data->online &&
-		    data->enable) {
-			LOG_ERR("Motor %s is not responding, setting it to offline.",
-				motor_devices[i]->name);
-			data->online = false;
+		if (now - data->prev_recv_time > 10000 / cfg->freq && data->common.link.online &&
+		    data->common.link.requested_enabled) {
+			motor_link_mark_offline(motor_devices[i], &data->common.link,
+						MOTOR_TELEMETRY_REASON_RX_TIMEOUT);
 			data->enabled = false;
 		}
 		k_sleep(K_USEC(130));

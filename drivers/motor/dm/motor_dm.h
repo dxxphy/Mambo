@@ -27,8 +27,8 @@
 #ifdef RAD2DEG
 #undef RAD2DEG
 #endif
-#define RAD2DEG   (180.0f / PI)
-#define DEG2RAD   PI / 180.0f
+#define RAD2DEG (180.0f / PI)
+#define DEG2RAD PI / 180.0f
 
 #define CANID_L 0u
 #define CANID_H 1u
@@ -51,8 +51,6 @@ struct dm_motor_data {
 	struct can_filter filter;
 
 	// Control status
-	bool online;
-	bool enable;
 	bool enabled;
 	bool update;
 	uint8_t tx_cnt;
@@ -129,8 +127,6 @@ K_TIMER_DEFINE(dm_tx_timer, dm_tx_isr_handler, NULL);
 	static struct dm_motor_data dm_motor_data_##inst = {                                       \
 		.common = MOTOR_DT_DRIVER_DATA_INST_GET(inst),                                     \
 		.tx_offset = 0,                                                                    \
-		.online = false,                                                                   \
-		.enable = false,                                                                   \
 		.enabled = false,                                                                  \
 		.prev_recv_time = 0,                                                               \
 		.err = 0,                                                                          \

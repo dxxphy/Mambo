@@ -6,83 +6,102 @@
 
 #include "motor_link.h"
 
-#include <stddef.h>
-
-static void reset_missed(int16_t *missed)
+static void reset_missed(struct motor_link_state *link)
 {
-	if (missed != NULL) {
-		*missed = 0;
+	if (link != NULL) {
+		link->missed = 0;
 	}
 }
 
-static void increment_missed(int16_t *missed)
+static void increment_missed(struct motor_link_state *link)
 {
-	if ((missed != NULL) && (*missed < INT16_MAX)) {
-		(*missed)++;
+	if ((link != NULL) && (link->missed < INT16_MAX)) {
+		link->missed++;
 	}
 }
 
-void motor_link_request_enable(bool *enabled, int16_t *missed)
+void motor_link_request_enable(struct motor_link_state *link)
 {
-	if (enabled != NULL) {
-		*enabled = true;
+	if (link != NULL) {
+		link->requested_enabled = true;
 	}
-	reset_missed(missed);
+	reset_missed(link);
 }
 
-void motor_link_request_disable(bool *online, bool *enabled, int16_t *missed)
+void motor_link_request_disable(struct motor_link_state *link)
 {
-	if (online != NULL) {
-		*online = false;
+	if (link != NULL) {
+		link->online = false;
+		link->requested_enabled = false;
 	}
-	if (enabled != NULL) {
-		*enabled = false;
-	}
-	reset_missed(missed);
+	reset_missed(link);
 }
 
-bool motor_link_observe_reply(bool *online, int16_t *missed)
+bool motor_link_mark_online(const struct device *motor, struct motor_link_state *link,
+			    enum motor_telemetry_reason reason)
 {
-	bool was_offline = (online != NULL) && !*online;
+	bool was_offline = (link != NULL) && !link->online;
 
-	if (online != NULL) {
-		*online = true;
+	if (link != NULL) {
+		link->online = true;
 	}
-	reset_missed(missed);
+	reset_missed(link);
+	if (was_offline) {
+		motor_telemetry_motor_online(motor, reason);
+	}
 	return was_offline;
 }
 
-bool motor_link_note_missed_reply(bool *online, bool enabled, int16_t *missed,
-				  int16_t offline_after_misses)
+bool motor_link_mark_offline(const struct device *motor, struct motor_link_state *link,
+			     enum motor_telemetry_reason reason)
 {
-	if (!enabled || (online == NULL) || (missed == NULL)) {
+	int16_t missed_count = link != NULL ? link->missed : 0;
+
+	if ((link == NULL) || !link->online) {
 		return false;
 	}
 
-	increment_missed(missed);
-	if (*online && (*missed >= offline_after_misses)) {
-		*online = false;
-		return true;
+	link->online = false;
+	motor_telemetry_motor_offline(motor, reason, missed_count);
+	return true;
+}
+
+bool motor_link_observe_reply(const struct device *motor, struct motor_link_state *link)
+{
+	return motor_link_mark_online(motor, link, MOTOR_TELEMETRY_REASON_REPLY);
+}
+
+bool motor_link_note_missed_reply(const struct device *motor, struct motor_link_state *link,
+				  int16_t offline_after_misses)
+{
+	if ((link == NULL) || !link->requested_enabled) {
+		return false;
+	}
+
+	increment_missed(link);
+	if (link->online && (link->missed >= offline_after_misses)) {
+		return motor_link_mark_offline(motor, link, MOTOR_TELEMETRY_REASON_MISSED_REPLY);
 	}
 
 	return false;
 }
 
-bool motor_link_observe_periodic_report(bool *online, int16_t *missed)
+bool motor_link_observe_periodic_report(const struct device *motor, struct motor_link_state *link)
 {
-	return motor_link_observe_reply(online, missed);
+	return motor_link_mark_online(motor, link, MOTOR_TELEMETRY_REASON_PERIODIC_REPORT);
 }
 
-bool motor_link_note_periodic_timeout(bool *online, int16_t *missed, int16_t offline_after_timeouts)
+bool motor_link_note_periodic_timeout(const struct device *motor, struct motor_link_state *link,
+				      int16_t offline_after_timeouts)
 {
-	if ((online == NULL) || (missed == NULL) || !*online) {
+	if ((link == NULL) || !link->online) {
 		return false;
 	}
 
-	increment_missed(missed);
-	if (*missed >= offline_after_timeouts) {
-		*online = false;
-		return true;
+	increment_missed(link);
+	if (link->missed >= offline_after_timeouts) {
+		return motor_link_mark_offline(motor, link,
+					       MOTOR_TELEMETRY_REASON_PERIODIC_TIMEOUT);
 	}
 
 	return false;

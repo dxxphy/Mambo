@@ -76,12 +76,12 @@ void mi_motor_control(const struct device *dev, enum motor_cmd cmd)
 	case ENABLE_MOTOR:
 		mi_can_id->mi_msg_mode = Communication_Type_MotorEnable;
 		motor_can_sched_send_prio(cfg->common.phy, &frame, true, "mi-enable");
-		motor_link_request_enable(&data->enabled, &data->missed_times);
+		motor_link_request_enable(&data->common.link);
 		break;
 	case DISABLE_MOTOR:
 		mi_can_id->mi_msg_mode = Communication_Type_MotorStop;
 		motor_can_sched_send_prio(cfg->common.phy, &frame, true, "mi-disable");
-		motor_link_request_disable(&data->online, &data->enabled, &data->missed_times);
+		motor_link_request_disable(&data->common.link);
 		break;
 	case SET_ZERO:
 		mi_can_id->mi_msg_mode = Communication_Type_SetPosZero;
@@ -276,10 +276,7 @@ static void mi_can_rx_handler(const struct device *can_dev, struct can_frame *fr
 
 	struct mi_motor_data *data = (struct mi_motor_data *)(motor_devices[id]->data);
 
-	if (!data->online) {
-		LOG_INF("Motor %s is online.", motor_devices[id]->name);
-	}
-	motor_link_observe_reply(&data->online, &data->missed_times);
+	motor_link_observe_reply(motor_devices[id], &data->common.link);
 	struct mi_can_id *can_id = (struct mi_can_id *)&(frame->id);
 	if (can_id->mi_msg_mode == Communication_Type_MotorFeedback) {
 		data->err = ((can_id->data) >> 8) & 0x3f;
@@ -341,12 +338,8 @@ void mi_tx_data_handler(struct k_work *work)
 	for (int i = 0; i < MOTOR_COUNT; i++) {
 		struct mi_motor_data *data = motor_devices[i]->data;
 		const struct mi_motor_cfg *cfg = motor_devices[i]->config;
-		if (data->enabled) {
-			if (motor_link_note_missed_reply(&data->online, data->enabled,
-							 &data->missed_times, 600)) {
-				LOG_ERR("Motor %s is not responding, setting it to offline.",
-					motor_devices[i]->name);
-			}
+		if (data->common.link.requested_enabled) {
+			motor_link_note_missed_reply(motor_devices[i], &data->common.link, 600);
 			mi_motor_pack(motor_devices[i], tx_frame);
 
 			motor_can_sched_send_reply(cfg->common.phy, &tx_frame[0],
@@ -409,8 +402,8 @@ int mi_get(const struct device *dev, motor_status_t *status)
 	status->speed_limit[1] = V_MIN;
 	status->torque_limit[0] = T_MAX;
 	status->torque_limit[1] = T_MIN;
-	status->online = data->online;
-	status->enabled = data->enabled;
+	status->online = data->common.link.online;
+	status->enabled = data->common.link.requested_enabled;
 	status->error = data->err;
 
 	return 0;

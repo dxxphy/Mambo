@@ -37,22 +37,22 @@
 #ifdef RAD2DEG
 #undef RAD2DEG
 #endif
-#define RAD2DEG          (180.0f / PI)
+#define RAD2DEG       (180.0f / PI)
 // 参数读取宏定义
-#define Run_mode         0x7005
-#define Iq_Ref           0x7006
-#define Spd_Ref          0x700A
-#define Limit_Torque     0x700B
-#define Cur_Kp           0x7010
-#define Cur_Ki           0x7011
-#define Cur_Filt_Gain    0x7014
-#define Loc_Ref          0x7016
-#define Limit_Spd        0x7017
-#define Limit_Cur        0x7018
-#define Loc_Kp           0x701E
-#define Spd_Kp           0x701F
-#define Spd_Ki           0x7020
-#define EPScan_time      0x7026
+#define Run_mode      0x7005
+#define Iq_Ref        0x7006
+#define Spd_Ref       0x700A
+#define Limit_Torque  0x700B
+#define Cur_Kp        0x7010
+#define Cur_Ki        0x7011
+#define Cur_Filt_Gain 0x7014
+#define Loc_Ref       0x7016
+#define Limit_Spd     0x7017
+#define Limit_Cur     0x7018
+#define Loc_Kp        0x701E
+#define Spd_Kp        0x701F
+#define Spd_Ki        0x7020
+#define EPScan_time   0x7026
 
 #define Gain_Angle  720 / 32767.0
 #define Bias_Angle  0x8000
@@ -93,7 +93,7 @@ struct rs_can_id {
 	uint32_t motor_id: 8;  // 目标ID
 	uint32_t master_id: 8; // 主机ID
 	uint32_t reserved: 8;  // 数据区
-	uint32_t msg_type: 5; // 通信类型
+	uint32_t msg_type: 5;  // 通信类型
 	uint32_t res: 3;
 };
 
@@ -126,10 +126,7 @@ struct rs_motor_data {
 	uint16_t RAWtemp;
 
 	uint8_t error_code;
-	bool online;
-	bool enabled;
 	struct motor_controller_params params;
-	int16_t missed_times;
 };
 
 struct rs_motor_cfg {
@@ -169,14 +166,13 @@ K_WORK_DEFINE(rs_tx_data_handle, rs_tx_data_handler);
 
 K_TIMER_DEFINE(rs_tx_timer, rs_tx_isr_handler, NULL);
 
-#define RS_MOTOR_TYPE(inst) DT_STRING_UNQUOTED_OR(DT_DRV_INST(inst), motor_type, RS02)
+#define RS_MOTOR_TYPE(inst)          DT_STRING_UNQUOTED_OR(DT_DRV_INST(inst), motor_type, RS02)
 #define RS_MOTOR_PARAM_(type, field) type##_##field
 #define RS_MOTOR_PARAM(type, field)  RS_MOTOR_PARAM_(type, field)
 
 #define RS_MOTOR_DATA_INST(inst)                                                                   \
 	static struct rs_motor_data rs_motor_data_##inst = {                                       \
 		.common = MOTOR_DT_DRIVER_DATA_INST_GET(inst),                                     \
-		.online = false,                                                                   \
 		.err = 0,                                                                          \
 		.delta_deg_sum = 0,                                                                \
 		.target_pos = 0,                                                                   \

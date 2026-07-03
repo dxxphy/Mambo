@@ -51,8 +51,6 @@ struct vesc_motor_data {
 	struct motor_driver_data common;
 	int8_t err;
 
-	bool online; // 电机在线状态
-	bool enable; // 电机使能状态
 	uint64_t prev_recv_time;
 	uint64_t last_ping_time;
 	// bool update;
@@ -92,8 +90,6 @@ extern const struct motor_driver_api vesc_motor_api;
 #define VESC_MOTOR_DATA_INST(inst)                                                                 \
 	static struct vesc_motor_data vesc_motor_data_##inst = {                                   \
 		.common = MOTOR_DT_DRIVER_DATA_INST_GET(inst),                                     \
-		.online = false,                                                                   \
-		.enable = false,                                                                   \
 		.prev_recv_time = 0,                                                               \
 		.last_ping_time = 0,                                                               \
 		.err = 0,                                                                          \

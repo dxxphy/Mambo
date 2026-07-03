@@ -49,18 +49,18 @@
 #ifdef RAD2DEG
 #undef RAD2DEG
 #endif
-#define RAD2DEG                (180.0f / PI)
+#define RAD2DEG       (180.0f / PI)
 // 参数读取宏定义
-#define Run_mode               0x7005
-#define Iq_Ref                 0x7006
-#define Spd_Ref                0x700A
-#define Limit_Torque           0x700B
-#define Cur_Kp                 0x7010
-#define Cur_Ki                 0x7011
-#define Cur_Filt_Gain          0x7014
-#define Loc_Ref                0x7016
-#define Limit_Spd              0x7017
-#define Limit_Cur              0x7018
+#define Run_mode      0x7005
+#define Iq_Ref        0x7006
+#define Spd_Ref       0x700A
+#define Limit_Torque  0x700B
+#define Cur_Kp        0x7010
+#define Cur_Ki        0x7011
+#define Cur_Filt_Gain 0x7014
+#define Loc_Ref       0x7016
+#define Limit_Spd     0x7017
+#define Limit_Cur     0x7018
 
 #define Gain_Angle  720 / 32767.0
 #define Bias_Angle  0x8000
@@ -106,7 +106,6 @@ struct mi_motor_data {
 	uint8_t can_id;    // CAN ID
 	uint8_t master_id; // MCU唯一标识符[后8位，共64位]
 
-	int16_t missed_times;
 	int8_t err;
 
 	float limit_cur;
@@ -122,9 +121,7 @@ struct mi_motor_data {
 	uint16_t RAWtemp;
 
 	uint8_t error_code;
-	bool online;
 	bool update;
-	bool enabled;
 	struct motor_controller_params params;
 };
 
@@ -172,8 +169,6 @@ K_TIMER_DEFINE(mi_tx_timer, mi_tx_isr_handler, NULL);
 #define MIMOTOR_DATA_INST(inst)                                                                    \
 	static struct mi_motor_data mi_motor_data_##inst = {                                       \
 		.common = MOTOR_DT_DRIVER_DATA_INST_GET(inst),                                     \
-		.online = false,                                                                   \
-		.missed_times = 0,                                                                 \
 		.err = 0,                                                                          \
 		.delta_deg_sum = 0,                                                                \
 		.target_pos = 0,                                                                   \

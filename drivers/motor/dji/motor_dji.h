@@ -58,8 +58,6 @@ struct dji_motor_data {
 	canbus_id_t canbus_id;
 	struct motor_controller *ctrl_struct;
 
-	// Control status
-	bool online;
 	uint8_t convert_num;
 	int8_t current_mode_index;
 
@@ -73,7 +71,6 @@ struct dji_motor_data {
 
 	uint32_t curr_time;
 	uint32_t prev_time;
-	int16_t missed_times;
 
 	float angle_offset;
 

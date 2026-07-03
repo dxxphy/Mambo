@@ -231,7 +231,15 @@ struct motor_controller_output {
 	float speed;
 };
 
+struct motor_link_state {
+	bool online;
+	bool requested_enabled;
+	int16_t missed;
+};
+
 struct motor_driver_data {
+	struct motor_link_state link;
+
 	float angle;
 	float rpm;
 	float torque;
@@ -775,6 +783,7 @@ static inline int motor_resolve_controller(const struct device *dev, motor_setpo
 
 #define MOTOR_DT_DRIVER_DATA_GET(node_id)                                                          \
 	{                                                                                          \
+		.link = {.online = false, .requested_enabled = false, .missed = 0},                \
 		.angle = 0,                                                                        \
 		.rpm = 0,                                                                          \
 		.torque = 0,                                                                       \

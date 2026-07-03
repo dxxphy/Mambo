@@ -64,12 +64,12 @@ void lk_motor_control(const struct device *dev, enum motor_cmd cmd)
 		frame.data[0] = LK_CMD_MOTOR_RUN; // 0x88
 		motor_can_sched_send_prio(cfg->common.phy, &frame, true, "lk-enable");
 		k_msleep(10);
-		motor_link_request_enable(&data->enabled, &data->missed_times);
+		motor_link_request_enable(&data->common.link);
 		break;
 	case DISABLE_MOTOR:
 		frame.data[0] = LK_CMD_MOTOR_OFF; // 0x80
 		motor_can_sched_send_prio(cfg->common.phy, &frame, true, "lk-disable");
-		motor_link_request_disable(&data->online, &data->enabled, &data->missed_times);
+		motor_link_request_disable(&data->common.link);
 		break;
 	case SET_ZERO:
 		// 设置当前位置为零点 (写入ROM)
@@ -290,11 +290,10 @@ static void lk_can_rx_handler(const struct device *can_dev, struct can_frame *fr
 	}
 
 	struct lk_motor_data *data = (struct lk_motor_data *)(motor_devices[idx]->data);
-	if (!data->online) {
+	if (!data->common.link.online) {
 		data->need_init_frames = true;
-		LOG_INF("Motor %s is online.", motor_devices[idx]->name);
 	}
-	motor_link_observe_reply(&data->online, &data->missed_times);
+	motor_link_observe_reply(motor_devices[idx], &data->common.link);
 	// Data[0]: 命令字节
 	// Data[1]: 温度
 	// Data[2-3]: 转矩电流/功率
@@ -349,15 +348,12 @@ void lk_tx_data_handler(struct k_work *work)
 		struct lk_motor_data *data = motor_devices[i]->data;
 		const struct lk_motor_cfg *cfg = motor_devices[i]->config;
 
-		if (data->enabled) {
-			if (motor_link_note_missed_reply(&data->online, data->enabled,
-							 &data->missed_times, 10)) {
-				LOG_ERR("Motor %s is not responding, setting it to offline.",
-					motor_devices[i]->name);
-
+		if (data->common.link.requested_enabled) {
+			if (motor_link_note_missed_reply(motor_devices[i], &data->common.link,
+							 10)) {
 				data->offline_tx_cnt = 0;
 			}
-			if (!data->online) {
+			if (!data->common.link.online) {
 				if ((data->offline_tx_cnt++ % 3U) == 0U) {
 					memset(&tx_frame, 0, sizeof(tx_frame));
 					tx_frame.id = LK_CMD_ID_BASE + cfg->id;
@@ -549,8 +545,8 @@ int lk_get(const struct device *dev, motor_status_t *status)
 	status->mode = data->common.mode;
 	status->target = data->common.target;
 	status->controller_id = data->common.controller_id;
-	status->online = data->online;
-	status->enabled = data->enabled;
+	status->online = data->common.link.online;
+	status->enabled = data->common.link.requested_enabled;
 	status->error = data->err;
 	return 0;
 }
