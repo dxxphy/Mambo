@@ -21,14 +21,17 @@ ARES 的板级模块提供统一的板级公共入口，用于处理：
 - `lib/ares/board/robomaster_board_c.c`
 - `lib/ares/board/dm_mc02.c`
 
-注意：`include/ares/board/init.h` 当前只保留了很薄的占位声明，实际公开 API 以
-`lib/ares/board/init.h` 中的内容为准。维护这部分时应同时核对包含路径是否满足调用方预期。
+注意：应用侧应包含 `include/ares/board/init.h`，板级内部实现使用
+`lib/ares/board/init.h`。维护这部分时应同时核对两个头文件中的公开声明。
 
 ## 公共接口
 
 统一 API 包括：
 
 - `ares_board_power_init()`
+- `ares_board_xt30_power_set(enum ares_board_xt30 xt30, bool enable)`（DM MC02）
+- `ares_board_xt30_power_on(enum ares_board_xt30 xt30)`（DM MC02）
+- `ares_board_xt30_power_off(enum ares_board_xt30 xt30)`（DM MC02）
 - `ares_board_status_led_init()`
 - `ares_board_status_led_service_start()`
 - `ares_board_status_led_set_rgb(const struct ares_led_rgb *color)`
@@ -113,11 +116,18 @@ ARES 的板级模块提供统一的板级公共入口，用于处理：
 `dm_mc02.c` 使用：
 
 - 一个 WS2812 类 LED strip alias
-- 可选的两路 XT30 电源 GPIO
+- 两路建模为 `regulator-fixed` 的 XT30 输出
 
 行为特征：
 
-- 电源节点存在时才进行配置。
+- 两路 XT30 默认 `regulator-boot-off`，板级初始化不主动上电。
+- `ares_board_power_init()` 不打开 XT30，应用必须显式调用手动控制 API。
+- `ares_board_xt30_power_set(enum ares_board_xt30 xt30, bool enable)`：按 `enable` 打开或关闭
+  指定 XT30 输出。
+- `ares_board_xt30_power_on(enum ares_board_xt30 xt30)`：打开指定 XT30 输出。
+- `ares_board_xt30_power_off(enum ares_board_xt30 xt30)`：关闭指定 XT30 输出。
+- `xt30` 参数可取 `ARES_BOARD_XT30_1`、`ARES_BOARD_XT30_2` 或
+  `ARES_BOARD_XT30_ALL`。
 - 状态灯通过 `led_strip_update_rgb()` 输出。
 - `ares_board_status_led_max_channel()` 返回 `0x7e`，不是满量程 `0xff`。
 

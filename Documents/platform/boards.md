@@ -40,6 +40,7 @@
 - `CONFIG_ARM_MPU=y`、`CONFIG_HW_STACK_PROTECTION=y`
 - `CONFIG_DMA=y`、`CONFIG_GPIO=y`、`CONFIG_SPI=y`、`CONFIG_I2C=y`
 - `CONFIG_CAN=y`、`CONFIG_COUNTER=y`、`CONFIG_PWM=y`
+- `CONFIG_REGULATOR=y`
 - `CONFIG_SERIAL=y`、`CONFIG_CONSOLE=y`、`CONFIG_UART_CONSOLE=y`
 - `CONFIG_SENSOR=y`、`CONFIG_BMI08X=y`
 - `CONFIG_LOG=y`、`CONFIG_LOG_BACKEND_UART=y`、`CONFIG_LOG_DEFAULT_LEVEL=3`
@@ -49,7 +50,11 @@
 
 ### 板级初始化边界
 
-- `ares_board_power_init()`：仅在 `power1`、`power2` 节点存在时将其配置为输出高电平。
+- `power1`、`power2`：两路 XT30 输出，DTS 中建模为 `regulator-fixed`，默认
+  `regulator-boot-off`。
+- `ares_board_power_init()`：不使能 XT30，开机保持断电。
+- `ares_board_xt30_power_on()` / `ares_board_xt30_power_off()`：应用侧手动控制单路或全部
+  XT30 输出。
 - `ares_board_status_led_set_rgb()`：基于 `led_strip`（WS2812）设置单点颜色。
 - `ares_board_status_led_max_channel()`：返回 `0x7e`。
 - `ares_board_status_led_init()`：设备就绪后点亮固定灰色并启动 `ares_board_status_led_service_start()`。
