@@ -133,7 +133,8 @@ static void la_parse_status_response(const uint8_t *payload, uint8_t len, struct
 
 	/* Offsets 10 and 12: force sensor value, with error flags between bytes. */
 	if (len >= 13) {
-		status->force_grams = (int16_t)((uint16_t)payload[10] | ((uint16_t)payload[12] << 8));
+		status->force_grams =
+			(int16_t)((uint16_t)payload[10] | ((uint16_t)payload[12] << 8));
 	} else {
 		status->force_grams = 0;
 	}
@@ -315,13 +316,17 @@ static void la_uart_isr(const struct device *uart_dev, void *user_data)
 									  &data->current_status);
 						/* Wake waiting thread */
 						k_sem_give(&data->reply_sem);
-						LOG_DBG("%s: valid reply len=%u cmd=0x%02x idx=0x%02x",
+						LOG_DBG("%s: valid reply len=%u cmd=0x%02x "
+							"idx=0x%02x",
 							dev->name, data->reply_len,
-							data->reply_len > 0 ? data->reply_buf[0] : 0,
-							data->reply_len > 1 ? data->reply_buf[1] : 0);
+							data->reply_len > 0 ? data->reply_buf[0]
+									    : 0,
+							data->reply_len > 1 ? data->reply_buf[1]
+									    : 0);
 					} else {
 						data->rx_wrong_id_count++;
-						LOG_DBG("%s: reply id mismatch got=%u expected=%u len=%u",
+						LOG_DBG("%s: reply id mismatch got=%u expected=%u "
+							"len=%u",
 							dev->name, rx_id, cfg->id, data->rx_len);
 					}
 					/* If ID doesn't match, another device on the bus
@@ -437,8 +442,8 @@ static int la_send_and_wait(const struct device *dev, uint8_t cmd, uint8_t index
 			data_d->rx_bad_checksum_count - rx_bad_checksum_before,
 			data_d->rx_wrong_id_count - rx_wrong_id_before,
 			la_rx_state_name(data_d->rx_state), data_d->rx_pos, data_d->rx_len,
-			data_d->rx_last_byte, data_d->rx_last_id,
-			data_d->rx_last_actual_checksum, data_d->rx_last_expected_checksum);
+			data_d->rx_last_byte, data_d->rx_last_id, data_d->rx_last_actual_checksum,
+			data_d->rx_last_expected_checksum);
 
 		/* Reset RX state machine after timeout (may be stuck) */
 		data_d->rx_state = LA_RX_WAIT_HEADER1;
@@ -518,8 +523,7 @@ int la_yinshi_set_position_no_feedback(const struct device *dev, uint16_t positi
 	}
 
 	sys_put_le16(position, pos_data);
-	la_send_no_wait(dev, LA_CMD_WR_DRV_POS_NF, LA_INDEX_TARGET_POS, pos_data,
-			sizeof(pos_data));
+	la_send_no_wait(dev, LA_CMD_WR_DRV_POS_NF, LA_INDEX_TARGET_POS, pos_data, sizeof(pos_data));
 
 	return 0;
 }

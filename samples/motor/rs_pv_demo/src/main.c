@@ -15,7 +15,7 @@
 
 LOG_MODULE_REGISTER(rs_pv_demo, LOG_LEVEL_INF);
 
-#define RS00_NODE DT_NODELABEL(rs00_motor)
+#define RS00_NODE    DT_NODELABEL(rs00_motor)
 #define CAN_BUS_NODE DT_NODELABEL(can3)
 
 static const struct device *const motor = DEVICE_DT_GET(RS00_NODE);
@@ -25,11 +25,7 @@ static const struct device *const can_bus = DEVICE_DT_GET(CAN_BUS_NODE);
 #define RS00_TEST_SPEED_LIMIT_RPM 20.0f
 
 static const float test_angle_deg[] = {
-	0.0f,
-	20.0f,
-	0.0f,
-	-20.0f,
-	0.0f,
+	0.0f, 20.0f, 0.0f, -20.0f, 0.0f,
 };
 
 static int32_t scale_100(float value)
@@ -66,8 +62,8 @@ static void log_status(const char *tag)
 	LOG_INF("%s online=%d enabled=%d mode=%d target=%d ctrl=%u err=%d angle_x100=%d "
 		"rpm_x100=%d torque_x1000=%d temp_x100=%d",
 		tag, status.online, status.enabled, status.mode, status.target,
-		status.controller_id, status.error, scale_100(status.angle),
-			scale_100(status.rpm), scale_1000(status.torque), scale_100(status.temperature));
+		status.controller_id, status.error, scale_100(status.angle), scale_100(status.rpm),
+		scale_1000(status.torque), scale_100(status.temperature));
 }
 
 static int set_rs00_pv_angle(float angle_deg, float speed_rpm)

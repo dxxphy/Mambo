@@ -468,7 +468,8 @@ void can_rx_callback(const struct device *can_dev, struct can_frame *frame, void
 			    ((const struct dji_motor_config *)motor_cfg->follow->config)
 				    ->common.phy) {
 			if (data->common.link.requested_enabled) {
-				data->ctrl_struct->mask[frame_id] |= 1 << motor_id(motor_cfg->follow);
+				data->ctrl_struct->mask[frame_id] |= 1
+								     << motor_id(motor_cfg->follow);
 			}
 		} else {
 			if (data->common.link.requested_enabled) {

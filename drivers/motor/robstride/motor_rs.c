@@ -16,13 +16,13 @@
 
 LOG_MODULE_REGISTER(motor_rs, CONFIG_MOTOR_LOG_LEVEL);
 
-#define RS_RUN_MODE_MIT 0U
-#define RS_RUN_MODE_CSP 5U
-#define RS_CSP_DEFAULT_LOC_KP 2.0f
-#define RS_CSP_DEFAULT_LIMIT_SPD 0.8f
-#define RS_CSP_DEFAULT_LIMIT_CUR 2.0f
-#define RS_CSP_DEFAULT_SPD_KI 0.02f
-#define RS_FEEDBACK_MASK 0x1F00FF00U
+#define RS_RUN_MODE_MIT               0U
+#define RS_RUN_MODE_CSP               5U
+#define RS_CSP_DEFAULT_LOC_KP         2.0f
+#define RS_CSP_DEFAULT_LIMIT_SPD      0.8f
+#define RS_CSP_DEFAULT_LIMIT_CUR      2.0f
+#define RS_CSP_DEFAULT_SPD_KI         0.02f
+#define RS_FEEDBACK_MASK              0x1F00FF00U
 #define RS_OFFLINE_RECOVERY_PERIOD_MS 200U
 
 static float uint16_to_float(uint16_t x, float x_min, float x_max, int bits)
@@ -67,8 +67,8 @@ static void rs_init_ext_frame(const struct rs_motor_cfg *cfg, struct can_frame *
 			      uint8_t msg_type, uint8_t reserved)
 {
 	*frame = (struct can_frame){
-		.id = rs_pack_ext_id(msg_type, cfg->common.rx_id & 0xFF,
-				     cfg->common.tx_id & 0xFF, reserved),
+		.id = rs_pack_ext_id(msg_type, cfg->common.rx_id & 0xFF, cfg->common.tx_id & 0xFF,
+				     reserved),
 		.dlc = 8,
 		.flags = CAN_FRAME_IDE,
 	};
@@ -312,9 +312,8 @@ static int rs_send_control_frame(const struct device *dev)
 	int ret;
 
 	if (data->common.mode == PV) {
-		float limit_spd =
-			rs_clamp_positive(fabsf(data->target_radps), RS_CSP_DEFAULT_LIMIT_SPD,
-					  cfg->v_max);
+		float limit_spd = rs_clamp_positive(fabsf(data->target_radps),
+						    RS_CSP_DEFAULT_LIMIT_SPD, cfg->v_max);
 
 		ret = rs_write_param_float(dev, Loc_Ref, data->target_pos, "rs-csp-loc-ref");
 		if (ret < 0) {
@@ -396,8 +395,8 @@ static int rs_apply_controller_mode(const struct device *dev, enum motor_mode mo
 	}
 
 	float loc_kp = rs_positive_or(pos_params.k_p, RS_CSP_DEFAULT_LOC_KP);
-	float limit_cur = rs_clamp_positive(vel_params.output_limit, RS_CSP_DEFAULT_LIMIT_CUR,
-					    cfg->t_max);
+	float limit_cur =
+		rs_clamp_positive(vel_params.output_limit, RS_CSP_DEFAULT_LIMIT_CUR, cfg->t_max);
 	float spd_ki = rs_positive_or(vel_params.k_i, RS_CSP_DEFAULT_SPD_KI);
 
 	if (rs_write_param_u8(dev, Run_mode, RS_RUN_MODE_CSP, "rs-set-csp-mode") < 0) {

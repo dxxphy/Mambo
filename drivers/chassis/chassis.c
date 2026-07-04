@@ -46,8 +46,8 @@ static void chassis_note_target_update(chassis_data_t *data)
 	data->target_update_us = chassis_uptime_us();
 }
 
-static void chassis_trace_sample(chassis_data_t *data, uint32_t cmd_age_us,
-				 uint32_t wakeup_us, uint32_t resolve_us)
+static void chassis_trace_sample(chassis_data_t *data, uint32_t cmd_age_us, uint32_t wakeup_us,
+				 uint32_t resolve_us)
 {
 	uint32_t now_ms = k_uptime_get_32();
 
@@ -67,12 +67,9 @@ static void chassis_trace_sample(chassis_data_t *data, uint32_t cmd_age_us,
 	if (data->trace_samples != 0U) {
 		LOG_INF("chassis trace: samples=%u cmd_age avg/max=%u/%u us "
 			"wakeup avg/max=%u/%u us resolve avg/max=%u/%u us",
-			data->trace_samples,
-			data->trace_cmd_age_sum_us / data->trace_samples,
-			data->trace_cmd_age_max_us,
-			data->trace_wakeup_sum_us / data->trace_samples,
-			data->trace_wakeup_max_us,
-			data->trace_resolve_sum_us / data->trace_samples,
+			data->trace_samples, data->trace_cmd_age_sum_us / data->trace_samples,
+			data->trace_cmd_age_max_us, data->trace_wakeup_sum_us / data->trace_samples,
+			data->trace_wakeup_max_us, data->trace_resolve_sum_us / data->trace_samples,
 			data->trace_resolve_max_us);
 	}
 
@@ -248,12 +245,11 @@ void chassis_thread_entry(void *arg1, void *arg2, void *arg3)
 		k_sem_take(&chassis_sem, K_FOREVER);
 #if IS_ENABLED(CONFIG_CHASSIS_LATENCY_TRACE)
 		uint32_t thread_start_us = chassis_uptime_us();
-		uint32_t cmd_age_us = data->target_update_us != 0U ?
-					      thread_start_us - data->target_update_us :
-					      0U;
-		uint32_t wakeup_us = data->timer_signal_us != 0U ?
-					     thread_start_us - data->timer_signal_us :
-					     0U;
+		uint32_t cmd_age_us = data->target_update_us != 0U
+					      ? thread_start_us - data->target_update_us
+					      : 0U;
+		uint32_t wakeup_us =
+			data->timer_signal_us != 0U ? thread_start_us - data->timer_signal_us : 0U;
 #endif
 
 		data->prevTime = data->currTime;
