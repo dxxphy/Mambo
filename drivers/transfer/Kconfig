@@ -28,6 +28,7 @@ config SBUS_INIT_PRIORITY
 
 config ARES_SBUS
     bool "ARES_SBUS"
+    select NOCACHE_MEMORY if ARCH_HAS_NOCACHE_MEMORY_SUPPORT
     help
       Add support for sbus
 

@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include "ares_sbus.h"
+#include <errno.h>
 #include <string.h>
 #include <sys/_intsup.h>
 #include <zephyr/drivers/uart.h>
@@ -9,6 +10,7 @@
 #include <zephyr/device.h>
 #include "zephyr/logging/log.h"
 #include "zephyr/sys/time_units.h"
+#include <zephyr/sys/util.h>
 
 #define DT_DRV_COMPAT ares_sbus
 
@@ -16,19 +18,43 @@ LOG_MODULE_REGISTER(ares_sbus, CONFIG_SBUS_LOG_LEVEL);
 
 // serial buffer pool
 #define BUF_SIZE 64
+#define SBUS_OFFLINE_TIMEOUT_MS 500
 K_MEM_SLAB_DEFINE_IN_SECT(sbus_uart_slab, __nocache, BUF_SIZE, 4, 4);
 
 static const struct device *uart_dev = DEVICE_DT_GET(DT_CHOSEN(sbus_uart));
 
+static void sbus_clear_frame_data(struct sbus_driver_data *data)
+{
+	memset(data->data, 0, sizeof(data->data));
+	memset(data->channels, 0, sizeof(data->channels));
+	data->frameLost = false;
+	data->failSafe = false;
+	data->digitalChannels[0] = false;
+	data->digitalChannels[1] = false;
+}
+
+static int sbus_check_online(const struct device *dev)
+{
+	struct sbus_driver_data *data = dev->data;
+	int64_t curr_time = k_uptime_get();
+
+	if (curr_time - data->recv_time <= SBUS_OFFLINE_TIMEOUT_MS) {
+		return 0;
+	}
+
+	sbus_clear_frame_data(data);
+	if (!data->offline) {
+		LOG_ERR("SBUS offline: no frame for %lld ms",
+			(long long)(curr_time - data->recv_time));
+		data->offline = true;
+	}
+
+	return -ENETDOWN;
+}
+
 int sbus_parseframe_chan(const struct device *dev, int chan)
 {
-	// 检查帧是否为空
 	struct sbus_driver_data *data = dev->data;
-
-	int curr_time = k_uptime_get();
-	if (curr_time - data->recv_time > 100) {
-		return 1024;
-	}
 
 	// 数据转换成通道值
 	switch (chan) {
@@ -117,6 +143,8 @@ static void uart_callback(const struct device *dev, struct uart_event *evt, void
 		}
 
 		data->recv_time = k_uptime_get();
+		data->offline = false;
+		sbus_parseframe(sbus_dev);
 		break;
 	}
 
@@ -175,6 +203,8 @@ static int sbus_init(const struct device *dev)
 
 	// 将所有通道值初始化为中间值
 	struct sbus_driver_data *data = dev->data;
+	data->recv_time = k_uptime_get();
+	data->offline = false;
 	for (int i = 0; i < 16; i++) {
 		data->channels[i] = 1024;
 	}
@@ -223,7 +253,13 @@ static int sbus_init(const struct device *dev)
 // 获取通道百分比
 float sbus_getchannel_percentage(const struct device *dev, uint8_t channelid)
 {
-	int chan = sbus_parseframe_chan(dev, channelid);
+	struct sbus_driver_data *data = dev->data;
+
+	if (sbus_check_online(dev) < 0 || channelid >= ARRAY_SIZE(data->channels)) {
+		return 0.0f;
+	}
+
+	int chan = data->channels[channelid];
 	float scale = 2.0f / (SBUS_MAX - SBUS_MIN);
 	float out = (int16_t)(chan - 1024) * scale;
 	return out;
@@ -232,8 +268,17 @@ float sbus_getchannel_percentage(const struct device *dev, uint8_t channelid)
 // 获取通道数字值
 int sbus_getchannel_digital(const struct device *dev, uint8_t channelid)
 {
-	int chan = sbus_parseframe_chan(dev, channelid);
-	return chan;
+	struct sbus_driver_data *data = dev->data;
+
+	if (sbus_check_online(dev) < 0) {
+		return -ENETDOWN;
+	}
+
+	if (channelid >= ARRAY_SIZE(data->channels)) {
+		return -EINVAL;
+	}
+
+	return data->channels[channelid];
 }
 
 static struct sbus_driver_api sbus_api = {
