@@ -16,6 +16,7 @@
 #include <arm_math.h>
 #include "zephyr/kernel/thread.h"
 #include "zephyr/sys/time_units.h"
+#include <zephyr/sys/util.h>
 #include "zephyr/toolchain.h"
 #include <math.h>
 
@@ -31,6 +32,65 @@ LOG_MODULE_REGISTER(chassis, CONFIG_MOTOR_LOG_LEVEL);
 #endif
 
 void chassis_timer_cb(struct k_timer *timer);
+
+#if IS_ENABLED(CONFIG_CHASSIS_LATENCY_TRACE)
+#define CHASSIS_TRACE_LOG_WINDOW_MS CONFIG_CHASSIS_LATENCY_TRACE_LOG_INTERVAL_MS
+
+static uint32_t chassis_uptime_us(void)
+{
+	return k_cyc_to_us_floor32(k_cycle_get_32());
+}
+
+static void chassis_note_target_update(chassis_data_t *data)
+{
+	data->target_update_us = chassis_uptime_us();
+}
+
+static void chassis_trace_sample(chassis_data_t *data, uint32_t cmd_age_us,
+				 uint32_t wakeup_us, uint32_t resolve_us)
+{
+	uint32_t now_ms = k_uptime_get_32();
+
+	data->trace_samples++;
+	data->trace_cmd_age_sum_us += cmd_age_us;
+	data->trace_cmd_age_max_us = MAX(data->trace_cmd_age_max_us, cmd_age_us);
+	data->trace_wakeup_sum_us += wakeup_us;
+	data->trace_wakeup_max_us = MAX(data->trace_wakeup_max_us, wakeup_us);
+	data->trace_resolve_sum_us += resolve_us;
+	data->trace_resolve_max_us = MAX(data->trace_resolve_max_us, resolve_us);
+
+	if ((data->trace_last_log_ms != 0U) &&
+	    (now_ms - data->trace_last_log_ms < CHASSIS_TRACE_LOG_WINDOW_MS)) {
+		return;
+	}
+
+	if (data->trace_samples != 0U) {
+		LOG_INF("chassis trace: samples=%u cmd_age avg/max=%u/%u us "
+			"wakeup avg/max=%u/%u us resolve avg/max=%u/%u us",
+			data->trace_samples,
+			data->trace_cmd_age_sum_us / data->trace_samples,
+			data->trace_cmd_age_max_us,
+			data->trace_wakeup_sum_us / data->trace_samples,
+			data->trace_wakeup_max_us,
+			data->trace_resolve_sum_us / data->trace_samples,
+			data->trace_resolve_max_us);
+	}
+
+	data->trace_last_log_ms = now_ms;
+	data->trace_samples = 0U;
+	data->trace_cmd_age_sum_us = 0U;
+	data->trace_cmd_age_max_us = 0U;
+	data->trace_wakeup_sum_us = 0U;
+	data->trace_wakeup_max_us = 0U;
+	data->trace_resolve_sum_us = 0U;
+	data->trace_resolve_max_us = 0U;
+}
+#else
+static void chassis_note_target_update(chassis_data_t *data)
+{
+	ARG_UNUSED(data);
+}
+#endif
 
 // struct k_thread chassis_thread_data;
 // K_THREAD_STACK_DEFINE(chassis_stack_area, CHASSIS_STACK_SIZE);
@@ -66,6 +126,7 @@ void cchassis_set_angle(const struct device *dev, float angle)
 	chassis_data_t *data = dev->data;
 	data->target_status.angle = angle;
 	data->angleControl = true;
+	chassis_note_target_update(data);
 }
 
 void cchassis_set_speed(const struct device *dev, float x_speed, float y_speed)
@@ -78,6 +139,7 @@ void cchassis_set_speed(const struct device *dev, float x_speed, float y_speed)
 	 */
 	data->target_status.speedX = -y_speed;
 	data->target_status.speedY = x_speed;
+	chassis_note_target_update(data);
 }
 
 void cchassis_set_gyro(const struct device *dev, float gyro)
@@ -85,6 +147,7 @@ void cchassis_set_gyro(const struct device *dev, float gyro)
 	chassis_data_t *data = dev->data;
 	data->target_status.gyro = gyro;
 	data->angleControl = false;
+	chassis_note_target_update(data);
 }
 
 int cchassis_set_static(const struct device *dev, bool static_angle)
@@ -93,6 +156,7 @@ int cchassis_set_static(const struct device *dev, bool static_angle)
 	data->static_angle = static_angle;
 	data->target_status.speedX = 0;
 	data->target_status.speedY = 0;
+	chassis_note_target_update(data);
 	if (fabsf(data->set_status.speedX) > 0.08f || fabsf(data->set_status.speedY) > 0.08f) {
 		return -EBUSY;
 	}
@@ -143,7 +207,6 @@ void cchassis_resolve(chassis_data_t *data, const chassis_cfg_t *cfg)
 		steerwheel_angle = -RAD2DEG(steerwheel_angle) + 90.0f;
 
 		wheel_set_speed(cfg->wheels[idx], steerwheel_speed, steerwheel_angle);
-		k_sleep(K_USEC(130));
 	}
 }
 
@@ -153,6 +216,9 @@ void chassis_timer_cb(struct k_timer *timer)
 	const struct device *dev = (const struct device *)k_timer_user_data_get(timer);
 	chassis_data_t *data = dev->data;
 	if (data->enabled) {
+#if IS_ENABLED(CONFIG_CHASSIS_LATENCY_TRACE)
+		data->timer_signal_us = chassis_uptime_us();
+#endif
 		k_sem_give(&chassis_sem);
 	}
 }
@@ -180,6 +246,16 @@ void chassis_thread_entry(void *arg1, void *arg2, void *arg3)
 
 	while (1) {
 		k_sem_take(&chassis_sem, K_FOREVER);
+#if IS_ENABLED(CONFIG_CHASSIS_LATENCY_TRACE)
+		uint32_t thread_start_us = chassis_uptime_us();
+		uint32_t cmd_age_us = data->target_update_us != 0U ?
+					      thread_start_us - data->target_update_us :
+					      0U;
+		uint32_t wakeup_us = data->timer_signal_us != 0U ?
+					     thread_start_us - data->timer_signal_us :
+					     0U;
+#endif
+
 		data->prevTime = data->currTime;
 		data->currTime = k_cycle_get_32();
 
@@ -316,7 +392,15 @@ void chassis_thread_entry(void *arg1, void *arg2, void *arg3)
 						? -cfg->max_gyro
 						: data->set_status.gyro;
 
+#if IS_ENABLED(CONFIG_CHASSIS_LATENCY_TRACE)
+		uint32_t resolve_start_us = chassis_uptime_us();
+
 		cchassis_resolve(data, cfg);
+		chassis_trace_sample(data, cmd_age_us, wakeup_us,
+				     chassis_uptime_us() - resolve_start_us);
+#else
+		cchassis_resolve(data, cfg);
+#endif
 	}
 }
 

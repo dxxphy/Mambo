@@ -86,7 +86,7 @@ static bool us_reached(uint32_t now, uint32_t deadline)
 
 static bool tx_latency_enabled(void)
 {
-	return CONFIG_MOTOR_LOG_LEVEL >= LOG_LEVEL_DBG;
+	return IS_ENABLED(CONFIG_MOTOR_CAN_SCHED_TX_LATENCY_TRACE);
 }
 
 static void wake_scheduler(void)
@@ -241,6 +241,17 @@ static bool ring_pop(struct motor_can_sched_ring *ring, struct motor_can_sched_e
 	return true;
 }
 
+static bool queues_empty_locked(const struct motor_can_sched_bus *bus)
+{
+	for (size_t i = 0; i < ARRAY_SIZE(bus->rings); i++) {
+		if (bus->rings[i].count != 0U) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
 static struct motor_can_sched_bus *find_bus(const struct device *can_dev)
 {
 	for (size_t i = 0; i < ARRAY_SIZE(sched_buses); i++) {
@@ -250,6 +261,16 @@ static struct motor_can_sched_bus *find_bus(const struct device *can_dev)
 	}
 
 	return NULL;
+}
+
+static void init_entry_locked(struct motor_can_sched_entry *entry, const struct can_frame *frame,
+			      const struct motor_can_sched_meta *meta, uint8_t retries)
+{
+	entry->frame = *frame;
+	entry->meta = *meta;
+	entry->queued_at_us = tx_latency_enabled() ? uptime_us_32() : 0U;
+	entry->trace_id = ++sched_trace_id;
+	entry->retries = retries;
 }
 
 static struct motor_can_sched_bus *register_bus_locked(const struct device *can_dev)
@@ -285,11 +306,7 @@ static int queue_entry_locked(const struct device *can_dev, const struct can_fra
 		return -EINVAL;
 	}
 
-	entry.frame = *frame;
-	entry.meta = *meta;
-	entry.queued_at_us = tx_latency_enabled() ? uptime_us_32() : 0U;
-	entry.trace_id = ++sched_trace_id;
-	entry.retries = retries;
+	init_entry_locked(&entry, frame, meta, retries);
 
 	ring = &bus->rings[meta->priority];
 	if (!ring_push(ring, &entry)) {
@@ -450,6 +467,69 @@ static int send_one(struct motor_can_sched_bus *bus, struct motor_can_sched_entr
 	if (entry->meta.has_periodic_reply) {
 		bus->stats.window_reserved_us += frame_airtime_us(bus->can_dev, &entry->frame);
 	}
+	k_spin_unlock(&sched_lock, key);
+
+	return 0;
+}
+
+static int try_fast_send(const struct device *can_dev, const struct can_frame *frame,
+			 const struct motor_can_sched_meta *meta)
+{
+	struct motor_can_sched_entry entry;
+	struct motor_can_sched_bus *bus;
+	k_spinlock_key_t key;
+	bool should_send = false;
+	uint32_t now_us;
+	int ret = -EAGAIN;
+
+	if (k_is_in_isr() || meta->expect_reply ||
+	    meta->priority != MOTOR_CAN_SCHED_PRIO_CRITICAL) {
+		return -EAGAIN;
+	}
+
+	now_us = uptime_us_32();
+	key = k_spin_lock(&sched_lock);
+	bus = find_bus(can_dev);
+	/* Only bypass the scheduler when no queued frame can be overtaken. */
+	if ((bus != NULL) && !bus->tx_in_flight &&
+	    (!IS_ENABLED(CONFIG_MOTOR_CAN_SCHED_REPLY_GUARD) ||
+	     us_reached(now_us, bus->reply_guard_until_us)) &&
+	    queues_empty_locked(bus)) {
+		init_entry_locked(&entry, frame, meta, 0U);
+		bus->tx_in_flight = true;
+		bus->tx_expect_reply = false;
+		bus->tx_reply_guard_us = 0U;
+		bus->tx_active_queued_at_us = entry.queued_at_us;
+		should_send = true;
+		ret = 0;
+	}
+	k_spin_unlock(&sched_lock, key);
+
+	if (!should_send) {
+		return ret;
+	}
+
+	ret = can_send(can_dev, &entry.frame, K_NO_WAIT, tx_done_callback, bus);
+	if (ret != 0) {
+		int queue_ret;
+
+		key = k_spin_lock(&sched_lock);
+		bus->tx_in_flight = false;
+		bus->tx_expect_reply = false;
+		bus->tx_reply_guard_us = 0U;
+		bus->tx_active_queued_at_us = 0U;
+		bus->stats.tx_busy++;
+		queue_ret = requeue_entry_locked(bus, &entry);
+		k_spin_unlock(&sched_lock, key);
+		if (queue_ret == 0) {
+			wake_scheduler();
+		}
+		return queue_ret;
+	}
+
+	key = k_spin_lock(&sched_lock);
+	bus->stats.tx_frames++;
+	bus->stats.window_tx_busy_us += frame_airtime_us(can_dev, &entry.frame);
 	k_spin_unlock(&sched_lock, key);
 
 	return 0;
@@ -715,6 +795,11 @@ static int motor_can_sched_submit(const struct device *can_dev, const struct can
 
 	ret = motor_can_sched_register_can(can_dev);
 	if (ret != 0) {
+		return ret;
+	}
+
+	ret = try_fast_send(can_dev, frame, meta);
+	if (ret != -EAGAIN) {
 		return ret;
 	}
 

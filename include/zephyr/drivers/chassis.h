@@ -63,6 +63,19 @@ typedef struct {
 	bool enabled;
 
 	struct pos_data chassis_sensor_data;
+
+#ifdef CONFIG_CHASSIS_LATENCY_TRACE
+	uint32_t target_update_us;
+	uint32_t timer_signal_us;
+	uint32_t trace_last_log_ms;
+	uint32_t trace_samples;
+	uint32_t trace_cmd_age_sum_us;
+	uint32_t trace_cmd_age_max_us;
+	uint32_t trace_wakeup_sum_us;
+	uint32_t trace_wakeup_max_us;
+	uint32_t trace_resolve_sum_us;
+	uint32_t trace_resolve_max_us;
+#endif
 } chassis_data_t;
 
 typedef struct {

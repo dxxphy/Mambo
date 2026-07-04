@@ -148,11 +148,12 @@ void motor_telemetry_can_scheduler_health(const struct device *can_dev,
 	pressure = (tx_busy_delta != 0U) || (dropped_delta != 0U) || (ack_timeout_delta != 0U) ||
 		   (pending_full_delta != 0U) || (giveup_delta != 0U);
 
-	if ((CONFIG_MOTOR_LOG_LEVEL >= LOG_LEVEL_DBG) && (stats->window_tx_latency_samples != 0U)) {
+	if (IS_ENABLED(CONFIG_MOTOR_CAN_SCHED_TX_LATENCY_TRACE) &&
+	    (stats->window_tx_latency_samples != 0U)) {
 		uint32_t avg_latency_us =
 			stats->window_tx_latency_sum_us / stats->window_tx_latency_samples;
 
-		LOG_DBG("CAN %s scheduler tx latency: samples=%u avg=%uus max=%uus", can_dev->name,
+		LOG_INF("CAN %s scheduler tx latency: samples=%u avg=%uus max=%uus", can_dev->name,
 			stats->window_tx_latency_samples, avg_latency_us,
 			stats->window_tx_latency_max_us);
 	}

@@ -38,6 +38,14 @@ config MOTOR_CAN_SCHED_REPLY_GUARD_EXTRA_US
 	  Extra time added after the calculated reply frame airtime. This covers
 	  motor-side processing delay before the reply frame starts arbitration.
 
+config MOTOR_CAN_SCHED_TX_LATENCY_TRACE
+	bool "Trace motor CAN scheduler TX latency"
+	default n
+	depends on MOTOR_COMMON
+	help
+	  Record and log queue-to-TX-completion latency for motor CAN scheduler
+	  frames. Enable this only when latency measurement is needed.
+
 config MOTOR_TELEMETRY
 	bool "Motor telemetry logging"
 	default y
