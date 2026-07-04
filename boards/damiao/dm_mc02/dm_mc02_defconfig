@@ -25,6 +25,7 @@ CONFIG_REGULATOR=y
 # On-board devices
 CONFIG_LED_STRIP=y
 CONFIG_SENSOR=y
+CONFIG_SENSOR_ASYNC_API=y
 CONFIG_BMI08X=y
 
 # Board status LED uses scheduler runtime stats to show CPU load.
