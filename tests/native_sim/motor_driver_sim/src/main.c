@@ -1144,6 +1144,7 @@ static void verify_dji_pid_sequence(void)
 		expected_current = dji_expected_current(targets[i], 0.0f);
 		expected_dji_current(expected_current, payload);
 
+		k_sleep(K_MSEC(1));
 		report_at_ms = (uint32_t)k_uptime_get();
 		emit_dji_report_with_rpm(0);
 		service_dji_tx_work();
