@@ -525,9 +525,6 @@ void lk_init_handler(struct k_work *work)
 				}
 			}
 		}
-		lk_motor_control(motor_devices[i], ENABLE_MOTOR);
-		k_sleep(K_USEC(120));
-		// lk_motor_control(motor_devices[i], SET_ZERO);
 	}
 	k_work_submit_to_queue(&lk_work_queue, &lk_tx_params_data_handle);
 	lk_tx_timer.expiry_fn = lk_tx_isr_handler;

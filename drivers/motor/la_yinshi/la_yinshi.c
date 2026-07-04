@@ -107,14 +107,15 @@ static uint8_t la_pack_command(uint8_t id, uint8_t cmd, uint8_t index, const uin
  *   [5-6]  = current position (int16 LE)
  *   [7]    = temperature (int8, °C)
  *   [8-9]  = drive current (uint16 LE, mA)
- *   [10-11] = force sensor / internal value (int16 LE)
- *   [12]    = error flags
+ *   [10]    = force sensor low byte
+ *   [11]    = error flags
+ *   [12]    = force sensor high byte
  *   [13-14] = internal data 1
  *   [15-16] = internal data 2
  */
 static void la_parse_status_response(const uint8_t *payload, uint8_t len, struct la_status *status)
 {
-	if (len < 13) {
+	if (len < 12) {
 		return;
 	}
 
@@ -130,19 +131,15 @@ static void la_parse_status_response(const uint8_t *payload, uint8_t len, struct
 	/* Offset 8: drive current */
 	status->current_ma = sys_get_le16(&payload[8]);
 
-	/* Offset 10: force sensor value */
-	if (len >= 12) {
-		status->force_grams = (int16_t)sys_get_le16(&payload[10]);
+	/* Offsets 10 and 12: force sensor value, with error flags between bytes. */
+	if (len >= 13) {
+		status->force_grams = (int16_t)((uint16_t)payload[10] | ((uint16_t)payload[12] << 8));
 	} else {
 		status->force_grams = 0;
 	}
 
-	/* Offset 12: error flags */
-	if (len >= 13) {
-		status->faults = payload[12] & 0x0F; /* lower 4 bits only */
-	} else {
-		status->faults = 0;
-	}
+	/* Offset 11: error flags */
+	status->faults = payload[11] & 0x0F; /* lower 4 bits only */
 
 	status->online = true;
 }
@@ -173,9 +170,34 @@ static void la_parse_generic_response(const uint8_t *payload, uint8_t len, struc
 	    cmd == LA_CMD_WR_DRV_FOLLOW || cmd == LA_CMD_WR_DRV_FOLLOW_NF) {
 		/* These all return status info in the same format */
 		la_parse_status_response(payload, len, status);
+	} else if (cmd == LA_CMD_RD && len >= 4) {
+		uint8_t index = payload[1];
+		uint16_t value = sys_get_le16(&payload[2]);
+
+		if (index == LA_INDEX_OVERCURRENT) {
+			LOG_INF("raw read overcurrent threshold=%u mA", value);
+		} else {
+			LOG_INF("raw read param index=0x%02x value=%u", index, value);
+		}
 	}
 	/* For CMD_WR / CMD_RD, just set online; detailed parsing not needed */
 	status->online = true;
+}
+
+static const char *la_rx_state_name(enum la_rx_state state)
+{
+	switch (state) {
+	case LA_RX_WAIT_HEADER1:
+		return "wait_h1";
+	case LA_RX_WAIT_HEADER2:
+		return "wait_h2";
+	case LA_RX_WAIT_LEN:
+		return "wait_len";
+	case LA_RX_WAIT_DATA:
+		return "wait_data";
+	default:
+		return "unknown";
+	}
 }
 
 /*===========================================================================*
@@ -203,6 +225,9 @@ static void la_uart_isr(const struct device *uart_dev, void *user_data)
 			break;
 		}
 
+		data->rx_byte_count++;
+		data->rx_last_byte = byte;
+
 		switch (data->rx_state) {
 
 		case LA_RX_WAIT_HEADER1:
@@ -225,6 +250,10 @@ static void la_uart_isr(const struct device *uart_dev, void *user_data)
 			data->rx_len = byte;
 			if (data->rx_len == 0 || data->rx_len > (LA_MAX_FRAME_LEN - 4)) {
 				/* Invalid length, reset */
+				data->rx_bad_len_count++;
+				data->rx_last_bad_len = data->rx_len;
+				LOG_DBG("%s: invalid reply len=%u last_byte=0x%02x", dev->name,
+					data->rx_len, byte);
 				data->rx_state = LA_RX_WAIT_HEADER1;
 			} else {
 				data->rx_pos = 0;
@@ -236,6 +265,7 @@ static void la_uart_isr(const struct device *uart_dev, void *user_data)
 			data->rx_buf[data->rx_pos++] = byte;
 			/* Need: ID(1) + payload(rx_len) + checksum(1) = rx_len + 2 */
 			if (data->rx_pos >= (uint8_t)(data->rx_len + 2)) {
+				data->rx_frame_count++;
 				/* Frame complete. Verify checksum.
 				 * rx_buf layout:
 				 *   [0] = ID
@@ -263,11 +293,18 @@ static void la_uart_isr(const struct device *uart_dev, void *user_data)
 					sum += data->rx_buf[i];
 				}
 
-				if ((uint8_t)(sum & 0xFF) == expected_chk) {
+				uint8_t actual_chk = (uint8_t)(sum & 0xFF);
+
+				data->rx_last_expected_checksum = expected_chk;
+				data->rx_last_actual_checksum = actual_chk;
+
+				if (actual_chk == expected_chk) {
 					/* Checksum OK. Check if ID matches. */
 					uint8_t rx_id = data->rx_buf[0];
+					data->rx_last_id = rx_id;
 
 					if (rx_id == cfg->id) {
+						data->rx_valid_frame_count++;
 						/* Copy payload (excluding ID and checksum) */
 						data->reply_len = data->rx_len;
 						memcpy(data->reply_buf, &data->rx_buf[1],
@@ -278,10 +315,24 @@ static void la_uart_isr(const struct device *uart_dev, void *user_data)
 									  &data->current_status);
 						/* Wake waiting thread */
 						k_sem_give(&data->reply_sem);
+						LOG_DBG("%s: valid reply len=%u cmd=0x%02x idx=0x%02x",
+							dev->name, data->reply_len,
+							data->reply_len > 0 ? data->reply_buf[0] : 0,
+							data->reply_len > 1 ? data->reply_buf[1] : 0);
+					} else {
+						data->rx_wrong_id_count++;
+						LOG_DBG("%s: reply id mismatch got=%u expected=%u len=%u",
+							dev->name, rx_id, cfg->id, data->rx_len);
 					}
 					/* If ID doesn't match, another device on the bus
 					 * responded; we ignore it.
 					 */
+				} else {
+					data->rx_bad_checksum_count++;
+					LOG_DBG("%s: reply checksum mismatch len=%u actual=0x%02x "
+						"expected=0x%02x id=%u",
+						dev->name, data->rx_len, actual_chk, expected_chk,
+						data->rx_buf[0]);
 				}
 				/* Reset state machine for next frame */
 				data->rx_state = LA_RX_WAIT_HEADER1;
@@ -323,6 +374,13 @@ static int la_send_and_wait(const struct device *dev, uint8_t cmd, uint8_t index
 	frame_len = la_pack_command(cfg->id, cmd, index, data, data_len, frame);
 
 	for (attempt = 0; attempt <= max_retries; attempt++) {
+		uint32_t rx_bytes_before = data_d->rx_byte_count;
+		uint32_t rx_frames_before = data_d->rx_frame_count;
+		uint32_t rx_valid_before = data_d->rx_valid_frame_count;
+		uint32_t rx_bad_len_before = data_d->rx_bad_len_count;
+		uint32_t rx_bad_checksum_before = data_d->rx_bad_checksum_count;
+		uint32_t rx_wrong_id_before = data_d->rx_wrong_id_count;
+
 		/* Reset RX state and semaphore before each attempt */
 		data_d->rx_state = LA_RX_WAIT_HEADER1;
 		k_sem_reset(&data_d->reply_sem);
@@ -355,12 +413,32 @@ static int la_send_and_wait(const struct device *dev, uint8_t cmd, uint8_t index
 		ret = k_sem_take(&data_d->reply_sem, K_MSEC(timeout_ms));
 		if (ret == 0) {
 			/* Got a valid reply */
+			LOG_DBG("%s: reply ok cmd=0x%02x idx=0x%02x attempt=%u "
+				"rx_delta=%u frame_delta=%u valid_delta=%u",
+				dev->name, cmd, index, attempt + 1,
+				data_d->rx_byte_count - rx_bytes_before,
+				data_d->rx_frame_count - rx_frames_before,
+				data_d->rx_valid_frame_count - rx_valid_before);
 			return 0;
 		}
 
 		/* Timeout — will retry if attempts remain */
 		LOG_DBG("%s: attempt %d/%d timeout (cmd=0x%02x idx=0x%02x)", dev->name, attempt + 1,
 			max_retries + 1, cmd, index);
+		LOG_WRN("%s: reply timeout cmd=0x%02x idx=0x%02x attempt=%u/%u "
+			"rx_delta=%u frame_delta=%u valid_delta=%u bad_len_delta=%u "
+			"bad_chk_delta=%u wrong_id_delta=%u state=%s rx_pos=%u rx_len=%u "
+			"last_byte=0x%02x last_id=%u chk_actual=0x%02x chk_expected=0x%02x",
+			dev->name, cmd, index, attempt + 1, max_retries + 1,
+			data_d->rx_byte_count - rx_bytes_before,
+			data_d->rx_frame_count - rx_frames_before,
+			data_d->rx_valid_frame_count - rx_valid_before,
+			data_d->rx_bad_len_count - rx_bad_len_before,
+			data_d->rx_bad_checksum_count - rx_bad_checksum_before,
+			data_d->rx_wrong_id_count - rx_wrong_id_before,
+			la_rx_state_name(data_d->rx_state), data_d->rx_pos, data_d->rx_len,
+			data_d->rx_last_byte, data_d->rx_last_id,
+			data_d->rx_last_actual_checksum, data_d->rx_last_expected_checksum);
 
 		/* Reset RX state machine after timeout (may be stuck) */
 		data_d->rx_state = LA_RX_WAIT_HEADER1;
@@ -370,6 +448,37 @@ static int la_send_and_wait(const struct device *dev, uint8_t cmd, uint8_t index
 	data_d->current_status.online = false;
 	motor_telemetry_motor_offline(dev, MOTOR_TELEMETRY_REASON_RX_TIMEOUT, max_retries + 1);
 	return -ETIMEDOUT;
+}
+
+static void la_send_no_wait(const struct device *dev, uint8_t cmd, uint8_t index,
+			    const uint8_t *data, uint8_t data_len)
+{
+	struct la_yinshi_data *data_d = dev->data;
+	const struct la_yinshi_config *cfg = dev->config;
+	uint8_t frame[LA_MAX_FRAME_LEN];
+	uint8_t frame_len;
+
+	frame_len = la_pack_command(cfg->id, cmd, index, data, data_len, frame);
+
+	k_mutex_lock(&data_d->lock, K_FOREVER);
+
+	if (cfg->de_gpio.port != NULL) {
+		gpio_pin_set_dt(&cfg->de_gpio, 1);
+		k_busy_wait(20);
+	}
+
+	for (uint8_t i = 0; i < frame_len; i++) {
+		uart_poll_out(cfg->uart_dev, frame[i]);
+	}
+
+	if (cfg->de_gpio.port != NULL) {
+		uint32_t tx_us = (uint32_t)frame_len * 120;
+
+		k_busy_wait(tx_us);
+		gpio_pin_set_dt(&cfg->de_gpio, 0);
+	}
+
+	k_mutex_unlock(&data_d->lock);
 }
 
 /*===========================================================================*
@@ -398,6 +507,21 @@ int la_yinshi_set_position(const struct device *dev, uint16_t position)
 
 	k_mutex_unlock(&data->lock);
 	return ret;
+}
+
+int la_yinshi_set_position_no_feedback(const struct device *dev, uint16_t position)
+{
+	uint8_t pos_data[2];
+
+	if (position > 2000) {
+		return -EINVAL;
+	}
+
+	sys_put_le16(position, pos_data);
+	la_send_no_wait(dev, LA_CMD_WR_DRV_POS_NF, LA_INDEX_TARGET_POS, pos_data,
+			sizeof(pos_data));
+
+	return 0;
 }
 
 int la_yinshi_get_status(const struct device *dev, struct la_status *status)

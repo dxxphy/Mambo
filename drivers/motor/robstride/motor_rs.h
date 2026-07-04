@@ -65,9 +65,6 @@
 #define Motor_Error 0x00
 #define Motor_OK    0x01
 
-#define CAN_SEND_STACK_SIZE 4096
-#define CAN_SEND_PRIORITY   -1
-
 #define CAN_FILTER_MASK 0x0000FF00
 
 enum CONTROL_MODE // 控制模式定义
@@ -142,13 +139,9 @@ struct rs_motor_cfg {
 	float kd_max;
 };
 
-struct k_work_q rs_work_queue;
 int rs_set(const struct device *dev, motor_setpoint_t *status);
 int rs_get(const struct device *dev, motor_status_t *status);
 void rs_motor_control(const struct device *dev, enum motor_cmd cmd);
-
-void rs_tx_isr_handler(struct k_timer *dummy);
-void rs_tx_data_handler(struct k_work *work);
 
 static const struct motor_driver_api rs_motor_api = {
 	.motor_get = rs_get,
@@ -159,12 +152,6 @@ static const struct motor_driver_api rs_motor_api = {
 #define MOTOR_COUNT            DT_NUM_INST_STATUS_OKAY(rs_motor)
 #define RS_MOTOR_POINTER(inst) DEVICE_DT_GET(DT_DRV_INST(inst)),
 static const struct device *motor_devices[] = {DT_INST_FOREACH_STATUS_OKAY(RS_MOTOR_POINTER)};
-
-K_THREAD_STACK_DEFINE(rs_work_queue_stack, CAN_SEND_STACK_SIZE);
-
-K_WORK_DEFINE(rs_tx_data_handle, rs_tx_data_handler);
-
-K_TIMER_DEFINE(rs_tx_timer, rs_tx_isr_handler, NULL);
 
 #define RS_MOTOR_TYPE(inst)          DT_STRING_UNQUOTED_OR(DT_DRV_INST(inst), motor_type, RS02)
 #define RS_MOTOR_PARAM_(type, field) type##_##field

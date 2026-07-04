@@ -214,7 +214,9 @@ struct motor_status {
 	enum motor_mode mode;
 	enum motor_target target;
 	uint8_t controller_id;
+	/* Communication reachability, independent from motor enable state. */
 	bool online;
+	/* Actual motor enable state when feedback reports it; otherwise requested enable state. */
 	bool enabled;
 	int error;
 };
@@ -237,7 +239,9 @@ struct motor_controller_output {
 };
 
 struct motor_link_state {
+	/* Communication reachability, updated by replies or periodic reports/timeouts. */
 	bool online;
+	/* Last requested enable state from ENABLE_MOTOR/DISABLE_MOTOR commands. */
 	bool requested_enabled;
 	int16_t missed;
 };

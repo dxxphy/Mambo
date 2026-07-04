@@ -29,6 +29,3 @@ properties:
     type: string
   t_max:
     type: string
-  read_only:
-    type: boolean
-    description: Skip automatic enable/control frames and only receive motor feedback.

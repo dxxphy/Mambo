@@ -5,6 +5,7 @@
 #include "../common/motor_link.h"
 #include "../common/motor_can_sched.h"
 #include "zephyr/drivers/motor.h"
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -14,6 +15,15 @@
 #define DT_DRV_COMPAT rs_motor
 
 LOG_MODULE_REGISTER(motor_rs, CONFIG_MOTOR_LOG_LEVEL);
+
+#define RS_RUN_MODE_MIT 0U
+#define RS_RUN_MODE_CSP 5U
+#define RS_CSP_DEFAULT_LOC_KP 2.0f
+#define RS_CSP_DEFAULT_LIMIT_SPD 0.8f
+#define RS_CSP_DEFAULT_LIMIT_CUR 2.0f
+#define RS_CSP_DEFAULT_SPD_KI 0.02f
+#define RS_FEEDBACK_MASK 0x1F00FF00U
+#define RS_OFFLINE_RECOVERY_PERIOD_MS 200U
 
 static float uint16_to_float(uint16_t x, float x_min, float x_max, int bits)
 {
@@ -35,8 +45,94 @@ static int float_to_uint(float x, float x_min, float x_max, int bits)
 
 static void rs_can_rx_handler(const struct device *can_dev, struct can_frame *frame,
 			      void *user_data);
+static void rs_offline_recovery_handler(struct k_work *work);
 
 static struct can_filter filters[MOTOR_COUNT];
+K_WORK_DELAYABLE_DEFINE(rs_offline_recovery_work, rs_offline_recovery_handler);
+
+static uint32_t rs_pack_ext_id(uint8_t msg_type, uint8_t master_id, uint8_t motor_id,
+			       uint8_t reserved)
+{
+	return (((uint32_t)msg_type & 0x1FU) << 24) | ((uint32_t)reserved << 16) |
+	       ((uint32_t)master_id << 8) | (uint32_t)motor_id;
+}
+
+static uint32_t rs_feedback_id(const struct rs_motor_cfg *cfg)
+{
+	return ((uint32_t)Communication_Type_MotorFeedback << 24) |
+	       (((uint32_t)cfg->common.tx_id & 0xFFU) << 8);
+}
+
+static void rs_init_ext_frame(const struct rs_motor_cfg *cfg, struct can_frame *frame,
+			      uint8_t msg_type, uint8_t reserved)
+{
+	*frame = (struct can_frame){
+		.id = rs_pack_ext_id(msg_type, cfg->common.rx_id & 0xFF,
+				     cfg->common.tx_id & 0xFF, reserved),
+		.dlc = 8,
+		.flags = CAN_FRAME_IDE,
+	};
+}
+
+static int rs_send_ext_reply(const struct device *dev, struct can_frame *frame, const char *tag)
+{
+	const struct rs_motor_cfg *cfg = dev->config;
+	int ret = motor_can_sched_send_reply(cfg->common.phy, frame, rs_feedback_id(cfg),
+					     RS_FEEDBACK_MASK, 5U, tag);
+
+	if (ret < 0) {
+		motor_stats_inc(MOTOR_STAT_TX_ERROR);
+	}
+	return ret;
+}
+
+static int rs_send_stop_frame(const struct device *dev, const char *tag)
+{
+	const struct rs_motor_cfg *cfg = dev->config;
+	struct can_frame frame;
+
+	rs_init_ext_frame(cfg, &frame, Communication_Type_MotorStop, 0);
+	return rs_send_ext_reply(dev, &frame, tag);
+}
+
+static int rs_write_param_float(const struct device *dev, uint16_t index, float value,
+				const char *tag)
+{
+	const struct rs_motor_cfg *cfg = dev->config;
+	struct can_frame frame;
+
+	rs_init_ext_frame(cfg, &frame, Communication_Type_SetSingleParameter, 0);
+	memcpy(&frame.data[0], &index, sizeof(index));
+	memcpy(&frame.data[4], &value, sizeof(value));
+	return rs_send_ext_reply(dev, &frame, tag);
+}
+
+static int rs_write_param_u8(const struct device *dev, uint16_t index, uint8_t value,
+			     const char *tag)
+{
+	const struct rs_motor_cfg *cfg = dev->config;
+	struct can_frame frame;
+
+	rs_init_ext_frame(cfg, &frame, Communication_Type_SetSingleParameter, 0);
+	memcpy(&frame.data[0], &index, sizeof(index));
+	frame.data[4] = value;
+	return rs_send_ext_reply(dev, &frame, tag);
+}
+
+static float rs_positive_or(float value, float fallback)
+{
+	return value > 0.0f ? value : fallback;
+}
+
+static float rs_clamp_positive(float value, float fallback, float max)
+{
+	float out = rs_positive_or(value, fallback);
+
+	if (max > 0.0f && out > max) {
+		return max;
+	}
+	return out;
+}
 
 static int get_motor_id(struct can_frame *frame)
 {
@@ -48,6 +144,40 @@ static int get_motor_id(struct can_frame *frame)
 		}
 	}
 	return -1;
+}
+
+static void rs_send_enable_frame(const struct device *dev, const char *tag_prefix)
+{
+	const struct rs_motor_cfg *cfg = dev->config;
+	struct can_frame frame = {
+		.data = {0},
+		.dlc = 8,
+		.flags = CAN_FRAME_IDE,
+	};
+
+	frame.id = rs_pack_ext_id(Communication_Type_MotorStop, cfg->common.rx_id & 0xFF,
+				  cfg->common.tx_id & 0xFF, 0);
+	frame.data[0] = 0x01;
+	motor_can_sched_send_prio(cfg->common.phy, &frame, true, tag_prefix);
+
+	frame.id = rs_pack_ext_id(Communication_Type_MotorEnable, cfg->common.rx_id & 0xFF,
+				  cfg->common.tx_id & 0xFF, 0);
+	frame.data[0] = 0x0;
+	motor_can_sched_send_prio(cfg->common.phy, &frame, true, "rs-enable");
+}
+
+static void rs_send_auto_report_frame(const struct device *dev, const char *tag)
+{
+	const struct rs_motor_cfg *cfg = dev->config;
+	struct can_frame frame = {
+		.data = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x01, 0x00},
+		.dlc = 8,
+		.flags = CAN_FRAME_IDE,
+	};
+
+	frame.id = rs_pack_ext_id(Communication_Type_MotorReport, cfg->common.rx_id & 0xFF,
+				  cfg->common.tx_id & 0xFF, 0);
+	motor_can_sched_send_prio(cfg->common.phy, &frame, true, tag);
 }
 
 int rs_init(const struct device *dev)
@@ -63,10 +193,6 @@ int rs_init(const struct device *dev)
 		return 0;
 	}
 	initialized = true;
-
-	k_work_queue_init(&rs_work_queue);
-	k_work_queue_start(&rs_work_queue, rs_work_queue_stack, CAN_SEND_STACK_SIZE,
-			   CAN_SEND_PRIORITY, NULL);
 
 	for (int i = 0; i < MOTOR_COUNT; i++) {
 		const struct rs_motor_cfg *cfg =
@@ -89,24 +215,12 @@ int rs_init(const struct device *dev)
 			(const struct rs_motor_cfg *)(motor_devices[i]->config);
 
 		if (cfg->auto_report) {
-			struct rs_can_id id = {
-				.master_id = cfg->common.rx_id,
-				.motor_id = cfg->common.tx_id,
-				.reserved = 0,
-				.msg_type = Communication_Type_MotorReport,
-			};
-			struct can_frame frame = {
-				.data = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x01, 0x00},
-				.dlc = 8,
-				.flags = CAN_FRAME_IDE,
-			};
-			frame.id = *(uint32_t *)&id;
-			motor_can_sched_send_prio(cfg->common.phy, &frame, true, "rs-report");
+			rs_send_auto_report_frame(motor_devices[i], "rs-report");
 			k_sleep(K_MSEC(1));
 		}
 	}
 
-	k_timer_start(&rs_tx_timer, K_NO_WAIT, K_MSEC(5));
+	k_work_schedule(&rs_offline_recovery_work, K_MSEC(RS_OFFLINE_RECOVERY_PERIOD_MS));
 	return 0;
 }
 
@@ -114,11 +228,6 @@ void rs_motor_control(const struct device *dev, enum motor_cmd cmd)
 {
 	struct rs_motor_data *data = dev->data;
 	const struct rs_motor_cfg *cfg = dev->config;
-	struct rs_can_id id = {
-		.master_id = cfg->common.rx_id,
-		.motor_id = cfg->common.tx_id,
-		.reserved = 0,
-	};
 	struct can_frame frame = {
 		.data = {0},
 		.dlc = 8,
@@ -126,33 +235,25 @@ void rs_motor_control(const struct device *dev, enum motor_cmd cmd)
 	};
 	switch (cmd) {
 	case ENABLE_MOTOR:
-		id.msg_type = Communication_Type_MotorStop;
-		frame.id = *(uint32_t *)&id;
-		frame.data[0] = 0x01;
-		motor_can_sched_send_prio(cfg->common.phy, &frame, true, "rs-stop-before-enable");
-		// clear error before enabling
-		id.msg_type = Communication_Type_MotorEnable;
-		frame.id = *(uint32_t *)&id;
-		frame.data[0] = 0x0;
-		motor_can_sched_send_prio(cfg->common.phy, &frame, true, "rs-enable");
 		motor_link_request_enable(&data->common.link);
+		rs_send_enable_frame(dev, "rs-stop-before-enable");
 		break;
 	case DISABLE_MOTOR:
-		id.msg_type = Communication_Type_MotorStop;
-		frame.id = *(uint32_t *)&id;
+		frame.id = rs_pack_ext_id(Communication_Type_MotorStop, cfg->common.rx_id & 0xFF,
+					  cfg->common.tx_id & 0xFF, 0);
 		motor_can_sched_send_prio(cfg->common.phy, &frame, true, "rs-disable");
 		motor_link_request_disable(&data->common.link);
 		break;
 	case SET_ZERO:
-		id.msg_type = Communication_Type_SetPosZero;
-		frame.id = *(uint32_t *)&id;
+		frame.id = rs_pack_ext_id(Communication_Type_SetPosZero, cfg->common.rx_id & 0xFF,
+					  cfg->common.tx_id & 0xFF, 0);
 		frame.data[0] = 0x01;
 		data->common.angle = 0;
 		motor_can_sched_send_prio(cfg->common.phy, &frame, true, "rs-set-zero");
 		break;
 	case CLEAR_ERROR:
-		id.msg_type = Communication_Type_MotorStop;
-		frame.id = *(uint32_t *)&id;
+		frame.id = rs_pack_ext_id(Communication_Type_MotorStop, cfg->common.rx_id & 0xFF,
+					  cfg->common.tx_id & 0xFF, 0);
 		frame.data[0] = 0x01;
 		motor_can_sched_send_prio(cfg->common.phy, &frame, true, "rs-clear-error");
 		motor_link_request_disable(&data->common.link);
@@ -203,33 +304,54 @@ static void rs_motor_pack(const struct device *dev, struct can_frame *frame)
 	return;
 }
 
+static int rs_send_control_frame(const struct device *dev)
+{
+	struct rs_motor_data *data = dev->data;
+	const struct rs_motor_cfg *cfg = dev->config;
+	struct can_frame tx_frame = {0};
+	int ret;
+
+	if (data->common.mode == PV) {
+		float limit_spd =
+			rs_clamp_positive(fabsf(data->target_radps), RS_CSP_DEFAULT_LIMIT_SPD,
+					  cfg->v_max);
+
+		ret = rs_write_param_float(dev, Loc_Ref, data->target_pos, "rs-csp-loc-ref");
+		if (ret < 0) {
+			return ret;
+		}
+		return rs_write_param_float(dev, Limit_Spd, limit_spd, "rs-csp-limit-spd");
+	}
+
+	rs_motor_pack(dev, &tx_frame);
+	ret = motor_can_sched_send_prio(cfg->common.phy, &tx_frame, true, "rs-control");
+	if (ret < 0) {
+		motor_stats_inc(MOTOR_STAT_TX_ERROR);
+	}
+	return ret;
+}
+
 static int rs_apply_controller_mode(const struct device *dev, enum motor_mode mode)
 {
 
 	struct rs_motor_data *data = dev->data;
 	const struct rs_motor_cfg *cfg = dev->config;
 	char mode_str[10] = {0};
+	struct motor_controller_params pos_params = {0};
+	struct motor_controller_params vel_params = {0};
+	bool found = false;
 
 	switch (mode) {
 	case MIT:
 		strcpy(mode_str, "mit");
 		break;
+	case PV:
+		strcpy(mode_str, "pv");
+		break;
 	default:
 		motor_stats_inc(MOTOR_STAT_UNSUPPORTED_MODE);
 		return -ENOSYS;
 	}
-	struct can_frame frame = {0};
-	struct rs_can_id *rs_can_id = (struct rs_can_id *)&(frame.id);
-	rs_can_id->msg_type = Communication_Type_SetSingleParameter;
-	rs_can_id->motor_id = cfg->common.tx_id;
-	rs_can_id->master_id = cfg->common.rx_id;
-	frame.flags = CAN_FRAME_IDE;
-	frame.dlc = 8;
-	uint16_t index = Run_mode;
-	memcpy(&frame.data[0], &index, 2);
-
-	frame.data[4] = (uint8_t)mode;
-	motor_can_sched_send_prio(cfg->common.phy, &frame, true, "rs-set-mode");
 
 	for (int i = 0; i < motor_get_controller_count(dev); i++) {
 		const struct motor_controller_config *ctrl_cfg = &cfg->common.controllers[i];
@@ -243,21 +365,74 @@ static int rs_apply_controller_mode(const struct device *dev, enum motor_mode mo
 			continue;
 		}
 		if (strcmp(ctrl_cfg->info.name, mode_str) == 0 || ctrl_cfg->info.mode == mode) {
-			struct motor_controller_params params = {0};
-
-			if (motor_controller_get_params(ctrl_cfg, 0, &params) < 0) {
+			if (motor_controller_get_params(ctrl_cfg, 0, &pos_params) < 0) {
+				continue;
+			}
+			if (mode == PV &&
+			    motor_controller_get_params(ctrl_cfg, 1, &vel_params) < 0) {
 				continue;
 			}
 
 			data->common.mode = mode;
 			data->common.target = MOTOR_TARGET_POSITION;
 			data->common.controller_id = i;
-			data->params.k_p = params.k_p;
-			data->params.k_d = params.k_d;
+			data->params.k_p = pos_params.k_p;
+			data->params.k_d = pos_params.k_d;
+			found = true;
 			break;
 		}
 	}
+	if (!found) {
+		motor_stats_inc(MOTOR_STAT_UNSUPPORTED_MODE);
+		return -ENOSYS;
+	}
+
+	if (rs_send_stop_frame(dev, "rs-stop-before-mode") < 0) {
+		return -EIO;
+	}
+
+	if (mode == MIT) {
+		return rs_write_param_u8(dev, Run_mode, RS_RUN_MODE_MIT, "rs-set-mit-mode");
+	}
+
+	float loc_kp = rs_positive_or(pos_params.k_p, RS_CSP_DEFAULT_LOC_KP);
+	float limit_cur = rs_clamp_positive(vel_params.output_limit, RS_CSP_DEFAULT_LIMIT_CUR,
+					    cfg->t_max);
+	float spd_ki = rs_positive_or(vel_params.k_i, RS_CSP_DEFAULT_SPD_KI);
+
+	if (rs_write_param_u8(dev, Run_mode, RS_RUN_MODE_CSP, "rs-set-csp-mode") < 0) {
+		return -EIO;
+	}
+	if (rs_write_param_float(dev, Loc_Kp, loc_kp, "rs-csp-loc-kp") < 0) {
+		return -EIO;
+	}
+	if (rs_write_param_float(dev, Limit_Cur, limit_cur, "rs-csp-limit-cur") < 0) {
+		return -EIO;
+	}
+	if (rs_write_param_float(dev, Spd_Ki, spd_ki, "rs-csp-spd-ki") < 0) {
+		return -EIO;
+	}
 	return 0;
+}
+
+static void rs_offline_recovery_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	for (int i = 0; i < MOTOR_COUNT; i++) {
+		const struct device *dev = motor_devices[i];
+		struct rs_motor_data *data = dev->data;
+		const struct rs_motor_cfg *cfg = dev->config;
+
+		if (data->common.link.requested_enabled && !data->common.link.online) {
+			rs_send_enable_frame(dev, "rs-offline-enable");
+			if (cfg->auto_report) {
+				rs_send_auto_report_frame(dev, "rs-offline-report");
+			}
+		}
+	}
+
+	k_work_schedule(&rs_offline_recovery_work, K_MSEC(RS_OFFLINE_RECOVERY_PERIOD_MS));
 }
 
 static void rs_can_rx_handler(const struct device *can_dev, struct can_frame *frame,
@@ -290,30 +465,6 @@ static void rs_can_rx_handler(const struct device *can_dev, struct can_frame *fr
 				uint16_to_float(data->RAWangle, -cfg->p_max, cfg->p_max, 16);
 		}
 		motor_link_observe_reply(dev, &data->common.link);
-	}
-}
-
-void rs_tx_isr_handler(struct k_timer *dummy)
-{
-	k_work_submit_to_queue(&rs_work_queue, &rs_tx_data_handle);
-}
-
-void rs_tx_data_handler(struct k_work *work)
-{
-	struct can_frame tx_frame = {0};
-
-	for (int i = 0; i < MOTOR_COUNT; i++) {
-		struct rs_motor_data *data = motor_devices[i]->data;
-		const struct rs_motor_cfg *cfg = motor_devices[i]->config;
-
-		if (data->common.link.requested_enabled) {
-			motor_link_note_missed_reply(motor_devices[i], &data->common.link, 100);
-			rs_motor_pack(motor_devices[i], &tx_frame);
-			motor_can_sched_send_reply(cfg->common.phy, &tx_frame,
-						   (Communication_Type_MotorFeedback << 24) |
-							   ((cfg->common.tx_id & 0xFF) << 8),
-						   0x1F00FF00, 5U, "rs-control");
-		}
 	}
 }
 
@@ -380,6 +531,15 @@ int rs_set(const struct device *dev, motor_setpoint_t *status)
 		data->target_pos = status->angle / RAD2DEG;
 		data->target_radps = RPM2RADPS(status->rpm);
 		data->target_torque = status->torque;
+	} else if (status->mode == PV) {
+		if (status->target != MOTOR_TARGET_NONE &&
+		    status->target != MOTOR_TARGET_POSITION) {
+			return -ENOSYS;
+		}
+		data->common.target = MOTOR_TARGET_POSITION;
+		data->target_pos = status->angle / RAD2DEG;
+		data->target_radps = RPM2RADPS(status->rpm);
+		data->target_torque = 0.0f;
 	} else {
 		return -ENOSYS;
 	}
@@ -391,7 +551,7 @@ int rs_set(const struct device *dev, motor_setpoint_t *status)
 	} else {
 		data->common.mode = status->mode;
 	}
-	return 0;
+	return rs_send_control_frame(dev);
 }
 
 DT_INST_FOREACH_STATUS_OKAY(RS_MOTOR_INST)

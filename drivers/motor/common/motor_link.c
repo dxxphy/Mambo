@@ -31,7 +31,6 @@ void motor_link_request_enable(struct motor_link_state *link)
 void motor_link_request_disable(struct motor_link_state *link)
 {
 	if (link != NULL) {
-		link->online = false;
 		link->requested_enabled = false;
 	}
 	reset_missed(link);

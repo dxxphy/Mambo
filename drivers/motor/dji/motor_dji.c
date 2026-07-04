@@ -154,6 +154,32 @@ static inline motor_id_t motor_id(const struct device *dev)
 	return cfg->common.id - 1;
 }
 
+static void dji_set_control_mask(const struct device *dev, bool enabled)
+{
+	struct dji_motor_data *data = dev->data;
+	const struct dji_motor_config *cfg = dev->config;
+	int8_t frame_id = frameID_to_index(cfg->common.tx_id);
+	uint8_t id;
+
+	if (frame_id < 0 || data->ctrl_struct == NULL) {
+		return;
+	}
+
+	if (cfg->follow &&
+	    cfg->common.phy == ((const struct dji_motor_config *)cfg->follow->config)->common.phy) {
+		id = motor_id(cfg->follow);
+	} else {
+		id = motor_id(dev);
+	}
+
+	if (enabled) {
+		data->ctrl_struct->mask[frame_id] |= BIT(id);
+	} else {
+		data->ctrl_struct->mask[frame_id] &= ~BIT(id);
+		data->ctrl_struct->flags &= ~BIT(id);
+	}
+}
+
 void dji_speed_limit(const struct device *dev, float max_speed, float min_speed)
 {
 	struct dji_motor_data *data = dev->data;
@@ -295,9 +321,15 @@ void dji_control(const struct device *dev, enum motor_cmd cmd)
 
 	switch (cmd) {
 	case ENABLE_MOTOR:
+		motor_link_request_enable(&data->common.link);
+		dji_set_control_mask(dev, true);
 		break;
 	case DISABLE_MOTOR:
 		motor_link_request_disable(&data->common.link);
+		dji_set_control_mask(dev, false);
+		data->target_torque = 0;
+		data->target_torque_ff = 0;
+		data->target_current = 0;
 		break;
 	case SET_ZERO:
 		data->angle_add = 0;
@@ -348,7 +380,7 @@ int dji_get(const struct device *dev, motor_status_t *status)
 	status->target = data->common.target;
 	status->controller_id = data->common.controller_id;
 	status->online = data->common.link.online;
-	status->enabled = data->common.link.online;
+	status->enabled = data->common.link.requested_enabled;
 	status->error = 0;
 
 	return 0;
@@ -371,14 +403,6 @@ int dji_init(const struct device *dev)
 		}
 		uint8_t frame_id = frameID_to_index(cfg->common.tx_id);
 		uint8_t id = motor_id(dev);
-		if (cfg->follow &&
-		    cfg->common.phy ==
-			    ((const struct dji_motor_config *)cfg->follow->config)->common.phy) {
-			const struct device *follow_dev = cfg->follow;
-			data->ctrl_struct->mask[frame_id] |= 1 << motor_id(follow_dev);
-		} else {
-			data->ctrl_struct->mask[frame_id] |= 1 << id;
-		}
 		if (data->ctrl_struct->rx_ids[id]) {
 			motor_stats_inc(MOTOR_STAT_CONFIG_ERROR);
 		}
@@ -443,9 +467,13 @@ void can_rx_callback(const struct device *can_dev, struct can_frame *frame, void
 		    motor_cfg->common.phy ==
 			    ((const struct dji_motor_config *)motor_cfg->follow->config)
 				    ->common.phy) {
-			data->ctrl_struct->mask[frame_id] |= 1 << motor_id(motor_cfg->follow);
+			if (data->common.link.requested_enabled) {
+				data->ctrl_struct->mask[frame_id] |= 1 << motor_id(motor_cfg->follow);
+			}
 		} else {
-			data->ctrl_struct->mask[frame_id] |= 1 << id;
+			if (data->common.link.requested_enabled) {
+				data->ctrl_struct->mask[frame_id] |= 1 << id;
+			}
 		}
 		if (was_timed_out) {
 			motor_stats_inc(MOTOR_STAT_DRIVER_ERROR);
@@ -745,7 +773,8 @@ void dji_tx_handler(struct k_work *work)
 				}
 				const struct device *dev = ctrl_struct->motor_devs[id_temp];
 				struct dji_motor_data *data = dev->data;
-				if (id_temp < 8 && data->common.link.online) {
+				if (id_temp < 8 && data->common.link.online &&
+				    data->common.link.requested_enabled) {
 					if (!data->calculated) {
 						motor_calc(ctrl_struct->motor_devs[id_temp]);
 						data->calculated = true;

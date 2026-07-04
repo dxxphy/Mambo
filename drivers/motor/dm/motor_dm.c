@@ -25,6 +25,12 @@
 #define DM_OFFLINE_MISSED_REPLIES        4
 #define DM_TX_TIMER_PERIOD_MS            1U
 
+#define DM_REG_RUN_MODE 0x0A
+#define DM_REG_KP_ASR   0x19
+#define DM_REG_KI_ASR   0x1A
+#define DM_REG_KP_APR   0x1B
+#define DM_REG_KI_APR   0x1C
+
 LOG_MODULE_REGISTER(motor_dm, CONFIG_MOTOR_LOG_LEVEL);
 
 /**
@@ -90,6 +96,21 @@ static int dm_send_cmd_frame(const struct device *dev, const uint8_t data[8], co
 	return motor_can_sched_send_prio(cfg->common.phy, &frame, true, tag);
 }
 
+static int dm_send_cmd_frame_reply(const struct device *dev, const uint8_t data[8], const char *tag)
+{
+	struct dm_motor_data *motor_data = dev->data;
+	const struct dm_motor_config *cfg = dev->config;
+	struct can_frame frame = {
+		.id = cfg->common.tx_id + motor_data->tx_offset,
+		.flags = 0,
+		.dlc = 8,
+	};
+
+	memcpy(frame.data, data, 8);
+	return motor_can_sched_send_reply(cfg->common.phy, &frame, cfg->common.rx_id & 0xFF,
+					  CAN_STD_ID_MASK, 5U, tag);
+}
+
 int dm_init(const struct device *dev)
 {
 	const struct dm_motor_config *cfg = dev->config;
@@ -120,17 +141,19 @@ void dm_control(const struct device *dev, enum motor_cmd cmd)
 
 	switch (cmd) {
 	case ENABLE_MOTOR:
-		if (dm_send_cmd_frame(dev, enable_frame, "dm-enable") < 0) {
+		if (dm_send_cmd_frame_reply(dev, enable_frame, "dm-enable") < 0) {
 			motor_stats_inc(MOTOR_STAT_TX_ERROR);
 		}
 		motor_link_request_enable(&data->common.link);
+		data->tx_cnt = 0;
+		data->last_tx_time = 0;
 		break;
 	case DISABLE_MOTOR:
-		if (dm_send_cmd_frame(dev, disable_frame, "dm-disable") < 0) {
+		if (dm_send_cmd_frame_reply(dev, disable_frame, "dm-disable") < 0) {
 			motor_stats_inc(MOTOR_STAT_TX_ERROR);
 		}
 		motor_link_request_disable(&data->common.link);
-		data->enabled = false;
+		data->tx_cnt = 0;
 		break;
 	case SET_ZERO:
 		if (dm_send_cmd_frame(dev, set_zero_frame, "dm-set-zero") < 0) {
@@ -193,6 +216,25 @@ static void dm_motor_pack(const struct device *dev, struct can_frame *frame)
 	default:
 		break;
 	}
+}
+
+static int dm_send_control_frame(const struct device *dev)
+{
+	struct dm_motor_data *data = dev->data;
+	const struct dm_motor_config *cfg = dev->config;
+	struct can_frame tx_frame = {0};
+	int ret;
+
+	dm_motor_pack(dev, &tx_frame);
+	ret = motor_can_sched_send_reply(cfg->common.phy, &tx_frame, cfg->common.rx_id & 0xFF,
+					 CAN_STD_ID_MASK, 5U, "dm-control");
+	if (ret == 0) {
+		data->last_tx_time = k_uptime_get();
+		data->tx_cnt++;
+	} else {
+		motor_stats_inc(MOTOR_STAT_TX_ERROR);
+	}
+	return ret;
 }
 
 int dm_get(const struct device *dev, motor_status_t *status)
@@ -262,10 +304,23 @@ static void dm_edit_reg_value(const struct device *dev, uint16_t can_id, uint8_t
 	motor_can_sched_send_prio(dev, &frame, true, "dm-reg");
 }
 
+static void dm_edit_reg_float(const struct device *dev, uint16_t can_id, uint8_t reg_addr,
+			      float reg_value)
+{
+	union {
+		float f;
+		uint32_t u;
+	} conv = {.f = reg_value};
+
+	dm_edit_reg_value(dev, can_id, reg_addr, conv.u);
+}
+
 static void dm_apply_controller_mode(const struct device *dev, enum motor_mode mode)
 {
 	struct dm_motor_data *data = dev->data;
 	const struct dm_motor_config *cfg = dev->config;
+	struct motor_controller_params params = {0};
+	struct motor_controller_params pv_velocity_params = {0};
 	char mode_str[10];
 
 	data->common.mode = mode;
@@ -275,17 +330,17 @@ static void dm_apply_controller_mode(const struct device *dev, enum motor_mode m
 	case MIT:
 		snprintf(mode_str, sizeof(mode_str), "mit");
 		data->tx_offset = 0x0;
-		dm_edit_reg_value(cfg->common.phy, cfg->common.tx_id, 0x0A, 0x01);
+		dm_edit_reg_value(cfg->common.phy, cfg->common.tx_id, DM_REG_RUN_MODE, 0x01);
 		break;
 	case PV:
 		snprintf(mode_str, sizeof(mode_str), "pv");
 		data->tx_offset = 0x100;
-		dm_edit_reg_value(cfg->common.phy, cfg->common.tx_id, 0x0A, 0x02);
+		dm_edit_reg_value(cfg->common.phy, cfg->common.tx_id, DM_REG_RUN_MODE, 0x02);
 		break;
 	case VO:
 		snprintf(mode_str, sizeof(mode_str), "vo");
 		data->tx_offset = 0x200;
-		dm_edit_reg_value(cfg->common.phy, cfg->common.tx_id, 0x0A, 0x03);
+		dm_edit_reg_value(cfg->common.phy, cfg->common.tx_id, DM_REG_RUN_MODE, 0x03);
 		break;
 	default:
 		dm_control(dev, DISABLE_MOTOR);
@@ -303,17 +358,17 @@ static void dm_apply_controller_mode(const struct device *dev, enum motor_mode m
 			continue;
 		}
 		if (strcmp(ctrl_cfg->info.name, mode_str) == 0 || ctrl_cfg->info.mode == mode) {
-			struct motor_controller_params params = {0};
-
 			if (motor_controller_get_params(ctrl_cfg, 0, &params) < 0) {
+				continue;
+			}
+			if (mode == PV &&
+			    motor_controller_get_params(ctrl_cfg, 1, &pv_velocity_params) < 0) {
 				continue;
 			}
 
 			data->common.mode = mode;
 			data->common.controller_id = i;
-			data->params.k_p = params.k_p;
-			data->params.k_i = params.k_i;
-			data->params.k_d = params.k_d;
+			data->params = params;
 			found = true;
 			break;
 		}
@@ -324,16 +379,19 @@ static void dm_apply_controller_mode(const struct device *dev, enum motor_mode m
 			dm_control(dev, DISABLE_MOTOR);
 		}
 	} else if (mode == VO) {
-		union {
-			float f;
-			uint32_t u;
-		} conv;
-		conv.f = data->params.k_p;
-		dm_edit_reg_value(cfg->common.phy, cfg->common.tx_id, 0x19, conv.u);
-		conv.f = data->params.k_i;
-		dm_edit_reg_value(cfg->common.phy, cfg->common.tx_id, 0x1A, conv.u);
+		dm_edit_reg_float(cfg->common.phy, cfg->common.tx_id, DM_REG_KP_ASR,
+				  data->params.k_p);
+		dm_edit_reg_float(cfg->common.phy, cfg->common.tx_id, DM_REG_KI_ASR,
+				  data->params.k_i);
 	} else if (mode == PV) {
-		motor_stats_inc(MOTOR_STAT_UNSUPPORTED_MODE);
+		dm_edit_reg_float(cfg->common.phy, cfg->common.tx_id, DM_REG_KP_ASR,
+				  pv_velocity_params.k_p);
+		dm_edit_reg_float(cfg->common.phy, cfg->common.tx_id, DM_REG_KI_ASR,
+				  pv_velocity_params.k_i);
+		dm_edit_reg_float(cfg->common.phy, cfg->common.tx_id, DM_REG_KP_APR,
+				  params.k_p);
+		dm_edit_reg_float(cfg->common.phy, cfg->common.tx_id, DM_REG_KI_APR,
+				  params.k_i);
 	}
 }
 
@@ -369,7 +427,7 @@ int dm_set(const struct device *dev, motor_setpoint_t *status)
 			return -ENOSYS;
 		}
 		data->common.target = MOTOR_TARGET_POSITION;
-		data->target_angle = status->angle;
+		data->target_angle = status->angle / (RAD2DEG);
 		data->target_radps = RPM2RADPS(status->rpm);
 	} else if (status->mode == VO) {
 		if (status->target != MOTOR_TARGET_NONE && status->target != MOTOR_TARGET_SPEED) {
@@ -391,7 +449,7 @@ int dm_set(const struct device *dev, motor_setpoint_t *status)
 		data->common.mode = status->mode;
 	}
 
-	return 0;
+	return dm_send_control_frame(dev);
 }
 
 void dm_rx_data_handler(struct k_work *work)
@@ -406,7 +464,7 @@ void dm_rx_data_handler(struct k_work *work)
 
 		float prev_angle = data->common.angle;
 		data->common.angle =
-			(uint_to_float(data->RAWangle, -cfg->p_max, cfg->p_max, 16))*RAD2DEG;
+			(uint_to_float(data->RAWangle, -cfg->p_max, cfg->p_max, 16)) * RAD2DEG;
 		data->common.rpm =
 			RADPS2RPM(uint_to_float(data->RAWrpm, -cfg->v_max, cfg->v_max, 12));
 		data->common.torque = uint_to_float(data->RAWtorque, -cfg->t_max, cfg->t_max, 12);
@@ -430,47 +488,18 @@ void dm_isr_init_handler(struct k_timer *dummy)
 
 void dm_tx_data_handler(struct k_work *work)
 {
-	struct can_frame tx_frame;
-
 	uint64_t now = k_uptime_get();
 
 	for (int i = 0; i < MOTOR_COUNT; i++) {
 		struct dm_motor_data *data = motor_devices[i]->data;
 		const struct dm_motor_config *cfg = motor_devices[i]->config;
 
-		if (!data->common.link.online && data->common.link.requested_enabled &&
-		    data->tx_cnt >= DM_OFFLINE_ENABLE_RETRY_TX_COUNT) {
-			if (dm_send_cmd_frame(motor_devices[i], enable_frame, "dm-retry-enable") ==
-			    0) {
-				data->tx_cnt = 0;
-			} else {
-				motor_stats_inc(MOTOR_STAT_TX_ERROR);
-			}
-		}
-		if (data->common.link.online && data->common.link.requested_enabled &&
-		    data->tx_cnt >= 3) {
-			if (!data->enabled) {
-				if (dm_send_cmd_frame(motor_devices[i], enable_frame,
-						      "dm-reenable") < 0) {
-					motor_stats_inc(MOTOR_STAT_TX_ERROR);
-				}
-			}
-			data->tx_cnt = 0;
-			if (data->err > 1) {
-				if (dm_send_cmd_frame(motor_devices[i], clear_error_frame,
-						      "dm-clear-error") < 0) {
-					motor_stats_inc(MOTOR_STAT_TX_ERROR);
-				}
-			}
-		}
 		if (data->common.link.requested_enabled &&
 		    now - data->last_tx_time >= dm_control_period_ms(cfg)) {
 			int ret;
 
-			dm_motor_pack(motor_devices[i], &tx_frame);
-			ret = motor_can_sched_send_reply(cfg->common.phy, &tx_frame,
-							 cfg->common.rx_id & 0xFF, CAN_STD_ID_MASK,
-							 5U, "dm-control");
+			ret = dm_send_cmd_frame_reply(motor_devices[i], enable_frame,
+						      "dm-enable-poll");
 			if (ret == 0) {
 				data->last_tx_time = now;
 				data->tx_cnt++;
@@ -481,6 +510,13 @@ void dm_tx_data_handler(struct k_work *work)
 				}
 			} else {
 				motor_stats_inc(MOTOR_STAT_TX_ERROR);
+			}
+			if (data->err > 1 && data->tx_cnt >= 3U) {
+				if (dm_send_cmd_frame(motor_devices[i], clear_error_frame,
+						      "dm-clear-error") < 0) {
+					motor_stats_inc(MOTOR_STAT_TX_ERROR);
+				}
+				data->tx_cnt = 0;
 			}
 		}
 		k_sleep(K_USEC(130));
@@ -511,13 +547,8 @@ void dm_init_handler(struct k_work *work)
 	k_sleep(K_MSEC(500));
 
 	for (int i = 0; i < MOTOR_COUNT; i++) {
-		const struct dm_motor_config *cfg =
-			(const struct dm_motor_config *)(motor_devices[i]->config);
 		struct dm_motor_data *data = motor_devices[i]->data;
 
-		if (!cfg->read_only) {
-			dm_control(motor_devices[i], ENABLE_MOTOR);
-		}
 		data->prev_recv_time = k_uptime_get_32();
 	}
 
