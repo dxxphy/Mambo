@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+
+description: Test UART used by the native_sim SBUS tests.
+
+compatible: "ares,test-uart"
+
+include: uart-controller.yaml

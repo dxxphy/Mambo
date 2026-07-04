@@ -12,15 +12,18 @@ properties:
   id:
     type: int
     required: true
+  rx_id:
+    type: int
+    description: Local host ID used as the VESC PING sender and PONG receiver ID.
   can_channel:
     type: phandle
     required: true
   gear_ratio:
     type: string
     required: true
-  capabilities:
-    type: string-array
-    required: true
+  controllers:
+    type: phandles
+    required: false
   kv:
     type: string
     required: true
@@ -39,3 +42,6 @@ properties:
   i_max:
     type: string
     required: true
+  freq:
+    type: int
+    description: VESC active ping frequency in Hz for online/offline detection.

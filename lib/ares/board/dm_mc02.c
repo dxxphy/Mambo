@@ -4,10 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <errno.h>
+
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
-#include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/led_strip.h>
+#include <zephyr/drivers/regulator.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
@@ -19,21 +21,53 @@ LOG_MODULE_DECLARE(board_init, CONFIG_BOARD_LOG_LEVEL);
 #define XT30_2_NODE DT_NODELABEL(power2)
 #define STRIP_NODE  DT_ALIAS(led_strip)
 
+static const struct device *const pwr1 = DEVICE_DT_GET(XT30_1_NODE);
+static const struct device *const pwr2 = DEVICE_DT_GET(XT30_2_NODE);
 static const struct device *const strip = DEVICE_DT_GET(STRIP_NODE);
 
-#if DT_NODE_EXISTS(XT30_1_NODE) && DT_NODE_HAS_PROP(XT30_1_NODE, gpios) &&                         \
-	DT_NODE_EXISTS(XT30_2_NODE) && DT_NODE_HAS_PROP(XT30_2_NODE, gpios)
-static const struct gpio_dt_spec pwr1 = GPIO_DT_SPEC_GET(XT30_1_NODE, gpios);
-static const struct gpio_dt_spec pwr2 = GPIO_DT_SPEC_GET(XT30_2_NODE, gpios);
-#endif
+static int xt30_regulator_set(const struct device *dev, bool enable)
+{
+	if (!device_is_ready(dev)) {
+		LOG_ERR("%s is not ready", dev->name);
+		return -ENODEV;
+	}
+
+	if (regulator_is_enabled(dev) == enable) {
+		return 0;
+	}
+
+	return enable ? regulator_enable(dev) : regulator_disable(dev);
+}
+
+int ares_board_xt30_power_set(enum ares_board_xt30 xt30, bool enable)
+{
+	int ret = 0;
+	int err;
+
+	if ((xt30 & ARES_BOARD_XT30_ALL) == 0) {
+		return -EINVAL;
+	}
+
+	if ((xt30 & ARES_BOARD_XT30_1) != 0) {
+		err = xt30_regulator_set(pwr1, enable);
+		if (err < 0) {
+			ret = err;
+		}
+	}
+
+	if ((xt30 & ARES_BOARD_XT30_2) != 0) {
+		err = xt30_regulator_set(pwr2, enable);
+		if (err < 0 && ret == 0) {
+			ret = err;
+		}
+	}
+
+	return ret;
+}
 
 void ares_board_power_init(void)
 {
-#if DT_NODE_EXISTS(XT30_1_NODE) && DT_NODE_HAS_PROP(XT30_1_NODE, gpios) &&                         \
-	DT_NODE_EXISTS(XT30_2_NODE) && DT_NODE_HAS_PROP(XT30_2_NODE, gpios)
-	gpio_pin_configure_dt(&pwr1, GPIO_OUTPUT_HIGH);
-	gpio_pin_configure_dt(&pwr2, GPIO_OUTPUT_HIGH);
-#endif
+	LOG_INF("XT30 power left off for manual control.");
 }
 
 int ares_board_status_led_set_rgb(const struct ares_led_rgb *color)

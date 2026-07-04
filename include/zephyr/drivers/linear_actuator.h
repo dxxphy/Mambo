@@ -62,6 +62,7 @@ enum la_cmd {
  * @brief Set target position callback
  */
 typedef int (*la_api_set_position_t)(const struct device *dev, uint16_t position);
+typedef int (*la_api_set_position_no_feedback_t)(const struct device *dev, uint16_t position);
 
 /**
  * @typedef la_api_get_status_t
@@ -90,6 +91,7 @@ typedef int (*la_api_set_param_t)(const struct device *dev, uint8_t index, uint1
  */
 __subsystem struct linear_actuator_driver_api {
 	la_api_set_position_t set_position;
+	la_api_set_position_no_feedback_t set_position_no_feedback;
 	la_api_get_status_t get_status;
 	la_api_cmd_t cmd;
 	la_api_set_param_t set_param;
@@ -117,6 +119,27 @@ static inline int la_set_position(const struct device *dev, uint16_t position)
 		return -ENOSYS;
 	}
 	return api->set_position(dev, position);
+}
+
+/**
+ * @brief Set target position without waiting for actuator feedback.
+ *
+ * Sends a no-feedback position command. This is useful for periodic target
+ * streaming where status is queried separately.
+ *
+ * @param dev Linear actuator device pointer
+ * @param position Target position (valid range: 0~2000)
+ * @return 0 on success, negative errno on failure
+ */
+static inline int la_set_position_no_feedback(const struct device *dev, uint16_t position)
+{
+	const struct linear_actuator_driver_api *api =
+		(const struct linear_actuator_driver_api *)dev->api;
+
+	if (api == NULL || api->set_position_no_feedback == NULL) {
+		return -ENOSYS;
+	}
+	return api->set_position_no_feedback(dev, position);
 }
 
 /**

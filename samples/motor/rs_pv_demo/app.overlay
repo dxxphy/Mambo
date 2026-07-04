@@ -1,0 +1,26 @@
+/ {
+	rs00_pv_ctrl: rs00_pv_ctrl {
+		#controller-cells = <0>;
+		compatible = "motor-controller,pv";
+		pos_k_p = "2.0";
+		pos_k_i = "0.0";
+		pos_k_d = "0.0";
+		pos_out_max = "45.0";
+		vel_k_p = "0.0";
+		vel_k_i = "0.0";
+		vel_k_d = "0.0";
+		vel_out_max = "2.0";
+	};
+
+	rs00_motor: rs00_motor {
+		compatible = "rs,motor";
+		id = <1>;
+		tx_id = <0x01>;
+		rx_id = <0xFD>;
+		motor_type = "RS00";
+		status = "okay";
+		can_channel = <&fdcan3>;
+		controllers = <&rs00_pv_ctrl>;
+		auto_report;
+	};
+};

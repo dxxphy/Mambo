@@ -14,7 +14,6 @@
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/motor.h>
-#include <zephyr/drivers/pid.h>
 #include <zephyr/drivers/can.h>
 
 #define DT_DRV_COMPAT dm_motor
@@ -25,8 +24,11 @@
 #define PI 3.14159265f
 
 #define RAD2ROUND 1.0f / (2 * PI)
-#define RAD2DEG   (180.0f / PI)
-#define DEG2RAD   PI / 180.0f
+#ifdef RAD2DEG
+#undef RAD2DEG
+#endif
+#define RAD2DEG (180.0f / PI)
+#define DEG2RAD PI / 180.0f
 
 #define CANID_L 0u
 #define CANID_H 1u
@@ -49,13 +51,11 @@ struct dm_motor_data {
 	struct can_filter filter;
 
 	// Control status
-	bool online;
-	bool enable;
 	bool enabled;
 	bool update;
 	uint8_t tx_cnt;
 
-	uint64_t prev_recv_time;
+	uint32_t prev_recv_time;
 	int8_t err;
 
 	// Process round
@@ -70,7 +70,7 @@ struct dm_motor_data {
 	int16_t RAWrpm;
 	int16_t RAWtorque;
 
-	struct pid_config params;
+	struct motor_controller_params params;
 
 	uint64_t last_tx_time;
 };
@@ -89,10 +89,9 @@ struct dm_motor_config {
 struct k_work_q dm_work_queue;
 
 // 函数声明
-int dm_set(const struct device *dev, motor_status_t *status);
+int dm_set(const struct device *dev, motor_setpoint_t *status);
 void dm_control(const struct device *dev, enum motor_cmd cmd);
 int dm_get(const struct device *dev, motor_status_t *status);
-void dm_motor_set_mode(const struct device *dev, enum motor_mode mode);
 
 void dm_rx_data_handler(struct k_work *work);
 
@@ -105,7 +104,6 @@ void dm_init_handler(struct k_work *work);
 static const struct motor_driver_api motor_api_funcs = {
 	.motor_get = dm_get,
 	.motor_set = dm_set,
-	.motor_set_mode = dm_motor_set_mode,
 	.motor_control = dm_control,
 };
 
@@ -129,8 +127,6 @@ K_TIMER_DEFINE(dm_tx_timer, dm_tx_isr_handler, NULL);
 	static struct dm_motor_data dm_motor_data_##inst = {                                       \
 		.common = MOTOR_DT_DRIVER_DATA_INST_GET(inst),                                     \
 		.tx_offset = 0,                                                                    \
-		.online = false,                                                                   \
-		.enable = false,                                                                   \
 		.enabled = false,                                                                  \
 		.prev_recv_time = 0,                                                               \
 		.err = 0,                                                                          \
@@ -148,7 +144,7 @@ K_TIMER_DEFINE(dm_tx_timer, dm_tx_isr_handler, NULL);
 		.v_max = (float)DT_STRING_UNQUOTED_OR(DT_DRV_INST(inst), v_max, 12.5),             \
 		.p_max = (float)DT_STRING_UNQUOTED_OR(DT_DRV_INST(inst), p_max, 20),               \
 		.t_max = (float)DT_STRING_UNQUOTED_OR(DT_DRV_INST(inst), t_max, 200),              \
-		.freq = (float)DT_PROP_OR(DT_DRV_INST(inst), freq, 500),                           \
+		.freq = CONFIG_MOTOR_DM_DEFAULT_FREQ_HZ,                                           \
 	};
 
 #define MOTOR_DEVICE_DT_DEFINE(node_id, init_fn, pm, data, config, level, prio, api, ...)          \
@@ -163,7 +159,6 @@ K_TIMER_DEFINE(dm_tx_timer, dm_tx_isr_handler, NULL);
 				    &motor_api_funcs);
 
 #define DMMOTOR_INST(inst)                                                                         \
-	MOTOR_DT_DRIVER_PID_DEFINE(DT_DRV_INST(inst))                                              \
 	DMMOTOR_CONFIG_INST(inst)                                                                  \
 	DMMOTOR_DATA_INST(inst)                                                                    \
 	DMMOTOR_DEFINE_INST(inst)

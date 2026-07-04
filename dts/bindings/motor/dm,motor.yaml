@@ -22,15 +22,10 @@ properties:
     required: true
   controllers:
     type: phandles
-    required: true
-  capabilities:
-    type: string-array
-    required: true
+    required: false
   v_max:
     type: string
   p_max:
     type: string
   t_max:
     type: string
-  freq:
-    type: int

@@ -27,4 +27,18 @@ config CHASSIS_INIT_PRIORITY
 	help
 	  The init priority of chassis driver
 
+config CHASSIS_LATENCY_TRACE
+	bool "Trace chassis control latency"
+	default n
+	help
+	  Record and log chassis command age, timer wakeup latency and resolve
+	  duration. Enable this only when chassis latency measurement is needed.
+
+config CHASSIS_LATENCY_TRACE_LOG_INTERVAL_MS
+	int "Chassis latency trace log interval in milliseconds"
+	default 1000
+	depends on CHASSIS_LATENCY_TRACE
+	help
+	  Minimum interval between repeated chassis latency trace logs.
+
 endif

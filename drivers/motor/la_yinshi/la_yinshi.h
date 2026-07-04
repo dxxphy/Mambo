@@ -114,6 +114,19 @@ struct la_yinshi_data {
 	/* ---- Current status cache ---- */
 	struct la_status current_status;
 
+	/* ---- RX debug counters ---- */
+	uint32_t rx_byte_count;
+	uint32_t rx_frame_count;
+	uint32_t rx_valid_frame_count;
+	uint32_t rx_bad_len_count;
+	uint32_t rx_bad_checksum_count;
+	uint32_t rx_wrong_id_count;
+	uint8_t rx_last_byte;
+	uint8_t rx_last_bad_len;
+	uint8_t rx_last_expected_checksum;
+	uint8_t rx_last_actual_checksum;
+	uint8_t rx_last_id;
+
 	/* ---- Retry tracking ---- */
 	uint8_t retry_count;
 };
@@ -123,6 +136,7 @@ struct la_yinshi_data {
  *---------------------------------------------------------------------------*/
 
 int la_yinshi_set_position(const struct device *dev, uint16_t position);
+int la_yinshi_set_position_no_feedback(const struct device *dev, uint16_t position);
 int la_yinshi_get_status(const struct device *dev, struct la_status *status);
 int la_yinshi_cmd(const struct device *dev, enum la_cmd cmd);
 int la_yinshi_set_param(const struct device *dev, uint8_t index, uint16_t value);
@@ -159,6 +173,7 @@ int la_yinshi_init(const struct device *dev);
 #define LA_YINSHI_API_INST(inst)                                                                   \
 	static const struct linear_actuator_driver_api la_yinshi_api_##inst = {                    \
 		.set_position = la_yinshi_set_position,                                            \
+		.set_position_no_feedback = la_yinshi_set_position_no_feedback,                    \
 		.get_status = la_yinshi_get_status,                                                \
 		.cmd = la_yinshi_cmd,                                                              \
 		.set_param = la_yinshi_set_param,                                                  \

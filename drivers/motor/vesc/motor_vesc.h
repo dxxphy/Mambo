@@ -11,7 +11,7 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/can.h>
 #include <zephyr/drivers/motor.h>
-#include <zephyr/drivers/pid.h>
+#include <zephyr/kernel.h>
 
 #define DT_DRV_COMPAT vesc_motor
 
@@ -37,7 +37,11 @@
 #define CAN_PACKET_STATUS_4 16 // 10倍MOSFET温度、10倍电机温度、10倍输入电流、50倍电机位置（int16）
 #define CAN_PACKET_STATUS_5 27 // 转速计（int32），十倍输入电压（int16）和一个保留位（int16）
 
-#define CAN_FILTER_MASK 0x0
+#define VESC_CAN_MOTOR_ID_MASK 0xFF
+#define VESC_CAN_MSG_TYPE_MASK 0xFF00
+
+#define VESC_CAN_SEND_STACK_SIZE 1536
+#define VESC_CAN_SEND_PRIORITY   -1
 
 struct vesc_can_id {
 	uint32_t motor_id: 8; // 电机ID
@@ -48,9 +52,10 @@ struct vesc_motor_data {
 	struct motor_driver_data common;
 	int8_t err;
 
-	bool online; // 电机在线状态
-	bool enable; // 电机使能状态
-	// bool update;
+	uint32_t prev_recv_time;
+	uint64_t last_ping_time;
+	uint64_t last_control_time;
+	bool control_valid;
 	float delta_deg_sum;
 	float target_angle;   // 目标位置，单位度
 	float target_radps;   // 目标速度，单位弧度每秒
@@ -78,18 +83,19 @@ struct vesc_motor_config {
 	float i_max; // 最大电流
 };
 
-int vesc_set(const struct device *dev, motor_status_t *status);
+int vesc_set(const struct device *dev, motor_setpoint_t *status);
 int vesc_get(const struct device *dev, motor_status_t *status);
 void vesc_motor_control(const struct device *dev, enum motor_cmd cmd);
-void vesc_motor_set_mode(const struct device *dev, enum motor_mode mode);
 
 extern const struct motor_driver_api vesc_motor_api;
 
 #define VESC_MOTOR_DATA_INST(inst)                                                                 \
 	static struct vesc_motor_data vesc_motor_data_##inst = {                                   \
 		.common = MOTOR_DT_DRIVER_DATA_INST_GET(inst),                                     \
-		.online = false,                                                                   \
-		.enable = false,                                                                   \
+		.prev_recv_time = 0,                                                               \
+		.last_ping_time = 0,                                                               \
+		.last_control_time = 0,                                                            \
+		.control_valid = false,                                                            \
 		.err = 0,                                                                          \
 		.delta_deg_sum = 0,                                                                \
 		.target_angle = 0,                                                                 \
@@ -99,11 +105,7 @@ extern const struct motor_driver_api vesc_motor_api;
 
 #define VESC_MOTOR_CONFIG_INST(inst)                                                               \
 	static const struct vesc_motor_config vesc_motor_config_##inst = {                         \
-		.common =                                                                          \
-			{                                                                          \
-				.phy = DEVICE_DT_GET(DT_INST_PHANDLE(inst, can_channel)),          \
-				.id = DT_INST_PROP(inst, id),                                      \
-			},                                                                         \
+		.common = MOTOR_DT_DRIVER_CONFIG_INST_GET(inst),                                   \
 		.kv = DT_STRING_UNQUOTED_OR(DT_DRV_INST(inst), kv, 150.0f),                        \
 		.kt = 60.0f /                                                                      \
 		      (2.f * VESC_PI * (float)DT_STRING_UNQUOTED_OR(DT_DRV_INST(inst), kv, 150)),  \
@@ -113,6 +115,7 @@ extern const struct motor_driver_api vesc_motor_api;
 		.v_max = DT_STRING_UNQUOTED_OR(DT_DRV_INST(inst), v_max, 314.0f),                  \
 		.t_max = DT_STRING_UNQUOTED_OR(DT_DRV_INST(inst), t_max, 1.5f),                    \
 		.i_max = DT_STRING_UNQUOTED_OR(DT_DRV_INST(inst), i_max, 22.2f),                   \
+		.freq = DT_PROP_OR(DT_DRV_INST(inst), freq, 10),                                   \
 	};
 
 #define MOTOR_DEVICE_DT_DEFINE(node_id, init_fn, pm, data, config, level, prio, api, ...)          \

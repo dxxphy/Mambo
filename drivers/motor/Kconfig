@@ -20,6 +20,45 @@ config MOTOR_COMMON
       Add support for common motor drivers
 	select CAN
 
+config MOTOR_CAN_SCHED_REPLY_GUARD
+	bool "Reserve CAN reply windows in motor scheduler"
+	default y
+	depends on MOTOR_COMMON
+	help
+	  Prevent the motor CAN scheduler from queueing another TX frame on the
+	  same CAN controller immediately after a request frame that expects a
+	  reply. This gives lower-priority motor reply frames a chance to win bus
+	  arbitration under high load.
+
+config MOTOR_CAN_SCHED_REPLY_GUARD_EXTRA_US
+	int "Additional motor CAN reply guard time in microseconds"
+	default 60
+	depends on MOTOR_CAN_SCHED_REPLY_GUARD
+	help
+	  Extra time added after the calculated reply frame airtime. This covers
+	  motor-side processing delay before the reply frame starts arbitration.
+
+config MOTOR_CAN_SCHED_TX_LATENCY_TRACE
+	bool "Trace motor CAN scheduler TX latency"
+	default n
+	depends on MOTOR_COMMON
+	help
+	  Record and log queue-to-TX-completion latency for motor CAN scheduler
+	  frames. Enable this only when latency measurement is needed.
+
+config MOTOR_TELEMETRY
+	bool "Motor telemetry logging"
+	default y
+	help
+	  Centralize motor link state logs and motor CAN scheduler health logs.
+
+config MOTOR_TELEMETRY_CAN_LOG_INTERVAL_MS
+	int "Motor telemetry CAN scheduler log interval in milliseconds"
+	default 2000
+	depends on MOTOR_TELEMETRY
+	help
+	  Minimum interval between repeated CAN scheduler pressure logs.
+
 config LA_YINSHI
 	bool "MOTOR LA YINSHI"
 	help
@@ -30,28 +69,31 @@ config MOTOR_DJI
     bool "MOTOR DJI"
     help
       Add support for dji motors
-    select PID
     select MOTOR_COMMON
 
 config MOTOR_DM
     bool "MOTOR DM"
     help
       Add support for dm motors
-    select PID
     select MOTOR_COMMON
+
+config MOTOR_DM_DEFAULT_FREQ_HZ
+	int "Default DM motor request frequency in Hz"
+	default 200
+	depends on MOTOR_DM
+	help
+	  Control request frequency for DM motors.
 
 config MOTOR_MI
     bool "MOTOR MI"
     help
       Add support for mi motors
-    select PID
     select MOTOR_COMMON
 
 config MOTOR_RS
     bool "MOTOR RS"
     help
       Add support for rs motors
-    select PID
     select MOTOR_COMMON
 
 config MOTOR_VESC
@@ -60,11 +102,17 @@ config MOTOR_VESC
       Add support for vesc motors
     select MOTOR_COMMON
 
+config MOTOR_VESC_CONTROL_FREQ_HZ
+	int "VESC control frame frequency in Hz"
+	default 100
+	depends on MOTOR_VESC
+	help
+	  Periodic latest-value control frame rate for VESC motors.
+
 config MOTOR_LK
     bool "MOTOR LK"
     help
       Add support for lk motors
-    select PID
     select MOTOR_COMMON
 
 config MOTOR_LOG_LEVEL

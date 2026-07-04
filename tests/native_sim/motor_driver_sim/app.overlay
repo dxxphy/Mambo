@@ -1,0 +1,109 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	chosen {
+		zephyr,canbus = &fake_can;
+	};
+
+	test_mit: test_mit {
+		compatible = "motor-controller,mit";
+		k_p = "0";
+		k_d = "0";
+	};
+
+	test_speed: test_speed {
+		compatible = "motor-controller,vo";
+		target = "speed";
+		k_p = "0.0001";
+	};
+
+	fake_can: fake_can {
+		compatible = "ares,test-can";
+		status = "okay";
+		bitrate = <1000000>;
+	};
+
+	dm0: dm0 {
+		compatible = "dm,motor";
+		status = "okay";
+		id = <1>;
+		tx_id = <0x01>;
+		rx_id = <0x11>;
+		can_channel = <&fake_can>;
+		v_max = "12.5";
+		p_max = "12.5";
+		t_max = "12.0";
+		controllers = <&test_mit &test_speed>;
+	};
+
+	mi0: mi0 {
+		compatible = "mi,motor";
+		status = "okay";
+		id = <2>;
+		tx_id = <0x02>;
+		rx_id = <0x02>;
+		can_channel = <&fake_can>;
+		gear_ratio = "1.0";
+		controllers = <&test_mit &test_speed>;
+	};
+
+	rs0: rs0 {
+		compatible = "rs,motor";
+		status = "okay";
+		id = <3>;
+		tx_id = <0x03>;
+		rx_id = <0x00>;
+		can_channel = <&fake_can>;
+		motor_type = "RS02";
+		controllers = <&test_mit>;
+		auto_report;
+	};
+
+	lk0: lk0 {
+		compatible = "lk,motor";
+		status = "okay";
+		id = <4>;
+		tx_id = <0x04>;
+		rx_id = <0x04>;
+		can_channel = <&fake_can>;
+		controllers = <&test_speed>;
+	};
+
+	dji0: dji0 {
+		compatible = "dji,motor";
+		status = "okay";
+		id = <5>;
+		tx_id = <0x200>;
+		rx_id = <0x205>;
+		can_channel = <&fake_can>;
+		gear_ratio = "1.0";
+		is_m3508;
+		controllers = <&test_speed>;
+	};
+
+	dji1: dji1 {
+		compatible = "dji,motor";
+		status = "okay";
+		id = <6>;
+		tx_id = <0x200>;
+		rx_id = <0x206>;
+		can_channel = <&fake_can>;
+		gear_ratio = "1.0";
+		is_m3508;
+		controllers = <&test_speed>;
+	};
+
+	dji2: dji2 {
+		compatible = "dji,motor";
+		status = "okay";
+		id = <7>;
+		tx_id = <0x1ff>;
+		rx_id = <0x207>;
+		can_channel = <&fake_can>;
+		gear_ratio = "1.0";
+		is_m3508;
+		controllers = <&test_speed>;
+	};
+};
