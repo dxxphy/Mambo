@@ -17,36 +17,36 @@
 #include <zephyr/sys/util.h>
 #include <zephyr/ztest.h>
 
-#define DM_NODE  DT_NODELABEL(dm0)
-#define MI_NODE  DT_NODELABEL(mi0)
-#define RS_NODE  DT_NODELABEL(rs0)
-#define LK_NODE  DT_NODELABEL(lk0)
-#define DJI_NODE DT_NODELABEL(dji0)
+#define DM_NODE   DT_NODELABEL(dm0)
+#define MI_NODE   DT_NODELABEL(mi0)
+#define RS_NODE   DT_NODELABEL(rs0)
+#define LK_NODE   DT_NODELABEL(lk0)
+#define DJI_NODE  DT_NODELABEL(dji0)
 #define DJI2_NODE DT_NODELABEL(dji1)
 #define DJI3_NODE DT_NODELABEL(dji2)
 
-#define DM_DEV  DEVICE_DT_GET(DM_NODE)
-#define MI_DEV  DEVICE_DT_GET(MI_NODE)
-#define RS_DEV  DEVICE_DT_GET(RS_NODE)
-#define LK_DEV  DEVICE_DT_GET(LK_NODE)
-#define DJI_DEV DEVICE_DT_GET(DJI_NODE)
+#define DM_DEV   DEVICE_DT_GET(DM_NODE)
+#define MI_DEV   DEVICE_DT_GET(MI_NODE)
+#define RS_DEV   DEVICE_DT_GET(RS_NODE)
+#define LK_DEV   DEVICE_DT_GET(LK_NODE)
+#define DJI_DEV  DEVICE_DT_GET(DJI_NODE)
 #define DJI2_DEV DEVICE_DT_GET(DJI2_NODE)
 #define DJI3_DEV DEVICE_DT_GET(DJI3_NODE)
 
-#define DM_TX_ID  DT_PROP(DM_NODE, tx_id)
-#define DM_RX_ID  DT_PROP(DM_NODE, rx_id)
-#define MI_ID     DT_PROP(MI_NODE, id)
-#define RS_TX_ID  DT_PROP(RS_NODE, tx_id)
-#define LK_ID     DT_PROP(LK_NODE, id)
-#define DJI_TX_ID DT_PROP(DJI_NODE, tx_id)
-#define DJI_RX_ID DT_PROP(DJI_NODE, rx_id)
+#define DM_TX_ID   DT_PROP(DM_NODE, tx_id)
+#define DM_RX_ID   DT_PROP(DM_NODE, rx_id)
+#define MI_ID      DT_PROP(MI_NODE, id)
+#define RS_TX_ID   DT_PROP(RS_NODE, tx_id)
+#define LK_ID      DT_PROP(LK_NODE, id)
+#define DJI_TX_ID  DT_PROP(DJI_NODE, tx_id)
+#define DJI_RX_ID  DT_PROP(DJI_NODE, rx_id)
 #define DJI2_TX_ID DT_PROP(DJI2_NODE, tx_id)
 #define DJI2_RX_ID DT_PROP(DJI2_NODE, rx_id)
 #define DJI3_TX_ID DT_PROP(DJI3_NODE, tx_id)
 #define DJI3_RX_ID DT_PROP(DJI3_NODE, rx_id)
 
-#define MI_MODE_FEEDBACK 0x02U
-#define RS_MODE_FEEDBACK 0x02U
+#define MI_MODE_FEEDBACK     0x02U
+#define RS_MODE_FEEDBACK     0x02U
 #define RS_MODE_MOTOR_ENABLE 0x03U
 #define RS_MODE_MOTOR_REPORT 0x18U
 
@@ -59,9 +59,9 @@
 #define RS_RATE_WINDOW_MS  300
 #define DJI_RATE_WINDOW_MS 300
 
-#define CONTROL_LATENCY_MS     1000
-#define DJI_CONTROL_LATENCY_MS 30
-#define ONLINE_RECOVERY_MS     30
+#define CONTROL_LATENCY_MS         1000
+#define DJI_CONTROL_LATENCY_MS     30
+#define ONLINE_RECOVERY_MS         30
 #define REPLY_RESPONDER_STACK_SIZE 1024
 
 struct sim_filter {
@@ -754,11 +754,21 @@ static void expected_dji_current(int16_t current, uint8_t data[CAN_MAX_DLEN])
 	data[1] = current & 0xFF;
 }
 
-static void expected_dji_current_slot(int16_t current, uint8_t slot,
-				      uint8_t data[CAN_MAX_DLEN])
+static void expected_dji_current_slot(int16_t current, uint8_t slot, uint8_t data[CAN_MAX_DLEN])
 {
 	data[slot * 2U] = (current >> 8) & 0xFF;
 	data[slot * 2U + 1U] = current & 0xFF;
+}
+
+static void configure_dji_speed_test_limits(const struct device *dev)
+{
+	int ret = motor_set(dev, &(motor_setpoint_t){
+					 .target = MOTOR_TARGET_NONE,
+					 .speed_limit = {-3000.0f, 3000.0f},
+					 .torque_limit = {-1.0f, 1.0f},
+				 });
+
+	zassert_equal(ret, 0, "DJI rejected test limits %d", ret);
 }
 
 static void emit_dm_feedback_enabled(bool enabled)
@@ -1119,6 +1129,7 @@ static void verify_dji_pid_sequence(void)
 	uint32_t previous_match = UINT32_MAX;
 
 	driver_motor_control(DJI_DEV, DISABLE_MOTOR);
+	configure_dji_speed_test_limits(DJI_DEV);
 	driver_motor_control(DJI_DEV, ENABLE_MOTOR);
 	k_sleep(K_MSEC(5));
 	sim_reset_tx_history();
@@ -1153,6 +1164,8 @@ ZTEST(motor_driver_sim, test_dji_same_tx_id_packs_multiple_motors)
 
 	driver_motor_control(DJI_DEV, ENABLE_MOTOR);
 	driver_motor_control(DJI2_DEV, ENABLE_MOTOR);
+	configure_dji_speed_test_limits(DJI_DEV);
+	configure_dji_speed_test_limits(DJI2_DEV);
 	zassert_equal(motor_set_speed(DJI_DEV, 1000.0f), 0, "DJI0 rejected speed setpoint");
 	zassert_equal(motor_set_speed(DJI2_DEV, 500.0f), 0, "DJI1 rejected speed setpoint");
 
@@ -1183,6 +1196,8 @@ ZTEST(motor_driver_sim, test_dji_distinct_tx_ids_send_independent_frames)
 
 	driver_motor_control(DJI_DEV, ENABLE_MOTOR);
 	driver_motor_control(DJI3_DEV, ENABLE_MOTOR);
+	configure_dji_speed_test_limits(DJI_DEV);
+	configure_dji_speed_test_limits(DJI3_DEV);
 	zassert_equal(motor_set_speed(DJI_DEV, 1000.0f), 0, "DJI0 rejected speed setpoint");
 	zassert_equal(motor_set_speed(DJI3_DEV, 700.0f), 0, "DJI2 rejected speed setpoint");
 
@@ -1202,9 +1217,9 @@ ZTEST(motor_driver_sim, test_dji_distinct_tx_ids_send_independent_frames)
 	report_at_ms = (uint32_t)k_uptime_get();
 	emit_dji_report_for(DJI3_RX_ID, 0);
 	service_dji_tx_work();
-	expect_payload_sequence_step("DJI tx 0x1ff", match_dji3_tx, DJI3_TX_ID,
-				     CAN_STD_ID_MASK, payload2, report_at_ms, NULL,
-				     DJI_CONTROL_LATENCY_MS, &start, &previous_match);
+	expect_payload_sequence_step("DJI tx 0x1ff", match_dji3_tx, DJI3_TX_ID, CAN_STD_ID_MASK,
+				     payload2, report_at_ms, NULL, DJI_CONTROL_LATENCY_MS, &start,
+				     &previous_match);
 }
 
 static void *motor_driver_sim_setup(void)
@@ -1402,7 +1417,6 @@ ZTEST(motor_driver_sim, test_control_send_rate_windows)
 	driver_motor_control(MI_DEV, DISABLE_MOTOR);
 	drain_all_reply_motors_until_quiet(50, 1200);
 	sim_reset_tx_history();
-
 }
 
 ZTEST(motor_driver_sim, test_dji_control_not_starved_by_reply_backlog)

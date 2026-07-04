@@ -24,10 +24,10 @@
 #define TEST_UART_NODE DT_NODELABEL(test_uart)
 #define SBUS_NODE      DT_NODELABEL(sbus0)
 
-#define SBUS_FRAME_SIZE       25
-#define SBUS_TEST_CHANNELS    16
-#define SBUS_OFFLINE_WAIT_MS  520
-#define SBUS_FLOAT_TOLERANCE  0.0001f
+#define SBUS_FRAME_SIZE      25
+#define SBUS_TEST_CHANNELS   16
+#define SBUS_OFFLINE_WAIT_MS 520
+#define SBUS_FLOAT_TOLERANCE 0.0001f
 
 struct test_uart_data {
 	uart_callback_t callback;
@@ -54,8 +54,7 @@ static int test_uart_callback_set(const struct device *dev, uart_callback_t call
 	return 0;
 }
 
-static int test_uart_rx_enable(const struct device *dev, uint8_t *buf, size_t len,
-			       int32_t timeout)
+static int test_uart_rx_enable(const struct device *dev, uint8_t *buf, size_t len, int32_t timeout)
 {
 	struct test_uart_data *data = dev->data;
 
@@ -140,15 +139,15 @@ static DEVICE_API(uart, test_uart_api) = {
 #define TEST_UART_DEFINE(inst)                                                                     \
 	static struct test_uart_data test_uart_data_##inst;                                        \
 	DEVICE_DT_INST_DEFINE(inst, test_uart_init, NULL, &test_uart_data_##inst, NULL,            \
-			      POST_KERNEL,                                                            \
-			      CONFIG_SERIAL_INIT_PRIORITY, &test_uart_api);
+			      POST_KERNEL, CONFIG_SERIAL_INIT_PRIORITY, &test_uart_api);
 
 DT_INST_FOREACH_STATUS_OKAY(TEST_UART_DEFINE)
 
 static const struct device *const test_uart = DEVICE_DT_GET(TEST_UART_NODE);
 static const struct device *const sbus = DEVICE_DT_GET(SBUS_NODE);
 
-static void sbus_pack_frame(uint8_t frame[SBUS_FRAME_SIZE], const uint16_t channels[SBUS_TEST_CHANNELS])
+static void sbus_pack_frame(uint8_t frame[SBUS_FRAME_SIZE],
+			    const uint16_t channels[SBUS_TEST_CHANNELS])
 {
 	memset(frame, 0, SBUS_FRAME_SIZE);
 	frame[0] = 0x0f;

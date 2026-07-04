@@ -2,7 +2,6 @@
 #include "ares_sbus.h"
 #include <errno.h>
 #include <string.h>
-#include <sys/_intsup.h>
 #include <zephyr/drivers/uart.h>
 #include <zephyr/drivers/sbus.h>
 #include <zephyr/devicetree.h>
@@ -17,7 +16,7 @@
 LOG_MODULE_REGISTER(ares_sbus, CONFIG_SBUS_LOG_LEVEL);
 
 // serial buffer pool
-#define BUF_SIZE 64
+#define BUF_SIZE                64
 #define SBUS_OFFLINE_TIMEOUT_MS 500
 K_MEM_SLAB_DEFINE_IN_SECT(sbus_uart_slab, __nocache, BUF_SIZE, 4, 4);
 
