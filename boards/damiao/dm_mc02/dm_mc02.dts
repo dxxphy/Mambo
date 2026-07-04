@@ -41,16 +41,18 @@
     };
 
     power_en {
-        compatible = "gpio-leds";
-
-        power1: power1 {
-            label = "POWER_24V_1";
-            gpios = <&gpioc 14 GPIO_ACTIVE_HIGH>;
+        power1: xt30_1_regulator {
+            compatible = "regulator-fixed";
+            regulator-name = "XT30_1";
+            enable-gpios = <&gpioc 14 GPIO_ACTIVE_HIGH>;
+            regulator-boot-off;
         };
 
-        power2: power2 {
-            label = "POWER_24V_2";
-            gpios = <&gpioc 13 GPIO_ACTIVE_HIGH>;
+        power2: xt30_2_regulator {
+            compatible = "regulator-fixed";
+            regulator-name = "XT30_2";
+            enable-gpios = <&gpioc 13 GPIO_ACTIVE_HIGH>;
+            regulator-boot-off;
         };
     };
 };
