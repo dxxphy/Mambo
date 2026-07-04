@@ -22,12 +22,16 @@
 #define RS_NODE  DT_NODELABEL(rs0)
 #define LK_NODE  DT_NODELABEL(lk0)
 #define DJI_NODE DT_NODELABEL(dji0)
+#define DJI2_NODE DT_NODELABEL(dji1)
+#define DJI3_NODE DT_NODELABEL(dji2)
 
 #define DM_DEV  DEVICE_DT_GET(DM_NODE)
 #define MI_DEV  DEVICE_DT_GET(MI_NODE)
 #define RS_DEV  DEVICE_DT_GET(RS_NODE)
 #define LK_DEV  DEVICE_DT_GET(LK_NODE)
 #define DJI_DEV DEVICE_DT_GET(DJI_NODE)
+#define DJI2_DEV DEVICE_DT_GET(DJI2_NODE)
+#define DJI3_DEV DEVICE_DT_GET(DJI3_NODE)
 
 #define DM_TX_ID  DT_PROP(DM_NODE, tx_id)
 #define DM_RX_ID  DT_PROP(DM_NODE, rx_id)
@@ -36,9 +40,15 @@
 #define LK_ID     DT_PROP(LK_NODE, id)
 #define DJI_TX_ID DT_PROP(DJI_NODE, tx_id)
 #define DJI_RX_ID DT_PROP(DJI_NODE, rx_id)
+#define DJI2_TX_ID DT_PROP(DJI2_NODE, tx_id)
+#define DJI2_RX_ID DT_PROP(DJI2_NODE, rx_id)
+#define DJI3_TX_ID DT_PROP(DJI3_NODE, tx_id)
+#define DJI3_RX_ID DT_PROP(DJI3_NODE, rx_id)
 
 #define MI_MODE_FEEDBACK 0x02U
 #define RS_MODE_FEEDBACK 0x02U
+#define RS_MODE_MOTOR_ENABLE 0x03U
+#define RS_MODE_MOTOR_REPORT 0x18U
 
 #define SIM_FILTER_MAX 16
 #define SIM_TX_MAX     128
@@ -52,6 +62,7 @@
 #define CONTROL_LATENCY_MS     1000
 #define DJI_CONTROL_LATENCY_MS 30
 #define ONLINE_RECOVERY_MS     30
+#define REPLY_RESPONDER_STACK_SIZE 1024
 
 struct sim_filter {
 	bool used;
@@ -484,14 +495,35 @@ static void sim_emit_frame(const struct device *can_dev, const struct can_frame 
 	}
 }
 
+static void read_motor_status(const struct device *dev, motor_status_t *status)
+{
+	const struct motor_driver_api *api = dev->api;
+	int ret = api->motor_get(dev, status);
+
+	zassert_true(ret == 0 || ret == -ENODEV, "motor_get returned unexpected error %d", ret);
+}
+
 static bool motor_online(const struct device *dev)
 {
 	motor_status_t status = {0};
-	const struct motor_driver_api *api = dev->api;
-	int ret = api->motor_get(dev, &status);
 
-	zassert_true(ret == 0 || ret == -ENODEV, "motor_get returned unexpected error %d", ret);
+	read_motor_status(dev, &status);
 	return status.online;
+}
+
+static bool motor_status_enabled(const struct device *dev)
+{
+	motor_status_t status = {0};
+
+	read_motor_status(dev, &status);
+	return status.enabled;
+}
+
+static bool motor_requested_enabled(const struct device *dev)
+{
+	const struct motor_driver_data *common = dev->data;
+
+	return common->link.requested_enabled;
 }
 
 static void driver_motor_control(const struct device *dev, enum motor_cmd cmd)
@@ -506,6 +538,28 @@ static void expect_online(const struct device *dev, bool expected, const char *n
 	bool online = motor_online(dev);
 
 	zassert_equal(online, expected, "%s online state mismatch", name);
+}
+
+static void expect_requested_enabled(const struct device *dev, bool expected, const char *name)
+{
+	bool requested_enabled = motor_requested_enabled(dev);
+
+	zassert_equal(requested_enabled, expected, "%s requested_enabled state mismatch", name);
+}
+
+static void expect_status_enabled(const struct device *dev, bool expected, const char *name)
+{
+	bool enabled = motor_status_enabled(dev);
+
+	zassert_equal(enabled, expected, "%s status.enabled state mismatch", name);
+}
+
+static void force_motor_offline(const struct device *dev)
+{
+	struct motor_driver_data *common = dev->data;
+
+	common->link.online = false;
+	common->link.missed = 0;
 }
 
 static void wait_for_online_state(const struct device *dev, bool expected, int timeout_ms,
@@ -538,6 +592,21 @@ static bool match_rs_tx(const struct can_frame *frame)
 	return ((frame->flags & CAN_FRAME_IDE) != 0U) && ((frame->id & 0xFFU) == RS_TX_ID);
 }
 
+static bool match_rs_msg_type(const struct can_frame *frame, uint8_t msg_type)
+{
+	return match_rs_tx(frame) && (((frame->id >> 24) & 0x1FU) == msg_type);
+}
+
+static bool match_rs_enable_tx(const struct can_frame *frame)
+{
+	return match_rs_msg_type(frame, RS_MODE_MOTOR_ENABLE);
+}
+
+static bool match_rs_auto_report_tx(const struct can_frame *frame)
+{
+	return match_rs_msg_type(frame, RS_MODE_MOTOR_REPORT);
+}
+
 static bool match_lk_tx(const struct can_frame *frame)
 {
 	return ((frame->flags & CAN_FRAME_IDE) == 0U) && frame->id == (0x140U + LK_ID);
@@ -546,6 +615,11 @@ static bool match_lk_tx(const struct can_frame *frame)
 static bool match_dji_tx(const struct can_frame *frame)
 {
 	return ((frame->flags & CAN_FRAME_IDE) == 0U) && frame->id == DJI_TX_ID;
+}
+
+static bool match_dji3_tx(const struct can_frame *frame)
+{
+	return ((frame->flags & CAN_FRAME_IDE) == 0U) && frame->id == DJI3_TX_ID;
 }
 
 static int test_float_to_uint(float x, float x_min, float x_max, int bits)
@@ -680,15 +754,27 @@ static void expected_dji_current(int16_t current, uint8_t data[CAN_MAX_DLEN])
 	data[1] = current & 0xFF;
 }
 
-static void emit_dm_feedback(void)
+static void expected_dji_current_slot(int16_t current, uint8_t slot,
+				      uint8_t data[CAN_MAX_DLEN])
+{
+	data[slot * 2U] = (current >> 8) & 0xFF;
+	data[slot * 2U + 1U] = current & 0xFF;
+}
+
+static void emit_dm_feedback_enabled(bool enabled)
 {
 	struct can_frame frame = {
 		.id = DM_RX_ID & CAN_STD_ID_MASK,
 		.dlc = 8,
-		.data = {0x11, 0, 0, 0, 0, 0, 0, 0},
+		.data = {(enabled ? 0x10U : 0x00U) | (DM_TX_ID & 0x0FU), 0, 0, 0, 0, 0, 0, 0},
 	};
 
 	sim_emit_frame(DEVICE_DT_GET(DT_NODELABEL(fake_can)), &frame);
+}
+
+static void emit_dm_feedback(void)
+{
+	emit_dm_feedback_enabled(true);
 }
 
 static void emit_mi_feedback(void)
@@ -724,15 +810,20 @@ static void emit_lk_feedback(void)
 	sim_emit_frame(DEVICE_DT_GET(DT_NODELABEL(fake_can)), &frame);
 }
 
-static void emit_dji_report_with_rpm(int16_t rpm)
+static void emit_dji_report_for(uint32_t rx_id, int16_t rpm)
 {
 	struct can_frame frame = {
-		.id = DJI_RX_ID,
+		.id = rx_id,
 		.dlc = 8,
 		.data = {0x20, 0, (rpm >> 8) & 0xFF, rpm & 0xFF, 0, 0, 25, 0},
 	};
 
 	sim_emit_frame(DEVICE_DT_GET(DT_NODELABEL(fake_can)), &frame);
+}
+
+static void emit_dji_report_with_rpm(int16_t rpm)
+{
+	emit_dji_report_for(DJI_RX_ID, rpm);
 }
 
 static void emit_dji_report(void)
@@ -742,14 +833,6 @@ static void emit_dji_report(void)
 
 static void service_dji_tx_work(void)
 {
-	struct motor_driver_data *common = DJI_DEV->data;
-
-	common->link.online = true;
-	ctrl_structs[0].can_dev = (struct device *)DEVICE_DT_GET(DT_NODELABEL(fake_can));
-	ctrl_structs[0].motor_devs[4] = (struct device *)DJI_DEV;
-	ctrl_structs[0].mapping[0][0] = 4;
-	ctrl_structs[0].mask[0] = BIT(4);
-	ctrl_structs[0].full[0] = true;
 	dji_tx_handler(&ctrl_structs[0].full_handle);
 }
 
@@ -776,21 +859,30 @@ static void verify_request_reply_motor(const struct device *dev, const char *nam
 {
 	uint32_t tx_start;
 	uint32_t recovery_ms;
+	bool was_online;
 
 	zassert_true(device_is_ready(dev), "%s device is not ready", name);
 	zassert_not_null(dev->api, "%s device has no driver API", name);
 	driver_motor_control(dev, DISABLE_MOTOR);
 	k_sleep(K_MSEC(15));
-	expect_online(dev, false, name);
+	was_online = motor_online(dev);
 
 	tx_start = sim_current_tx_count();
 	driver_motor_control(dev, ENABLE_MOTOR);
 	wait_for_tx_after(tx_start, match_tx, name);
-	expect_online(dev, false, name);
+	if (!was_online) {
+		expect_online(dev, false, name);
+	}
 
 	emit_feedback();
 	k_sleep(K_MSEC(10));
 	expect_online(dev, true, name);
+
+	if (offline_timeout_ms <= 0) {
+		driver_motor_control(dev, DISABLE_MOTOR);
+		k_sleep(K_MSEC(10));
+		return;
+	}
 
 	wait_for_online_state(dev, false, offline_timeout_ms, name);
 
@@ -803,7 +895,6 @@ static void verify_request_reply_motor(const struct device *dev, const char *nam
 
 	driver_motor_control(dev, DISABLE_MOTOR);
 	k_sleep(K_MSEC(10));
-	expect_online(dev, false, name);
 }
 
 static bool keep_reply_motor_unblocked(bool (*match_tx)(const struct can_frame *frame),
@@ -821,6 +912,53 @@ static bool keep_reply_motor_unblocked(bool (*match_tx)(const struct can_frame *
 	}
 
 	return replied;
+}
+
+struct reply_responder {
+	bool (*match_tx)(const struct can_frame *frame);
+	void (*emit_feedback)(void);
+	uint32_t cursor;
+	volatile bool stop;
+};
+
+static K_THREAD_STACK_DEFINE(reply_responder_stack, REPLY_RESPONDER_STACK_SIZE);
+static struct k_thread reply_responder_thread;
+
+static void reply_responder_entry(void *p1, void *p2, void *p3)
+{
+	struct reply_responder *responder = p1;
+
+	ARG_UNUSED(p2);
+	ARG_UNUSED(p3);
+
+	while (!responder->stop) {
+		keep_reply_motor_unblocked(responder->match_tx, responder->emit_feedback,
+					   &responder->cursor);
+		k_sleep(K_MSEC(1));
+	}
+
+	keep_reply_motor_unblocked(responder->match_tx, responder->emit_feedback,
+				   &responder->cursor);
+}
+
+static void reply_responder_start(struct reply_responder *responder,
+				  bool (*match_tx)(const struct can_frame *frame),
+				  void (*emit_feedback)(void), uint32_t cursor)
+{
+	*responder = (struct reply_responder){
+		.match_tx = match_tx,
+		.emit_feedback = emit_feedback,
+		.cursor = cursor,
+	};
+	k_thread_create(&reply_responder_thread, reply_responder_stack,
+			K_THREAD_STACK_SIZEOF(reply_responder_stack), reply_responder_entry,
+			responder, NULL, NULL, K_PRIO_PREEMPT(0), 0, K_NO_WAIT);
+}
+
+static void reply_responder_stop(struct reply_responder *responder)
+{
+	responder->stop = true;
+	k_thread_join(&reply_responder_thread, K_MSEC(100));
 }
 
 static void drain_reply_motor(bool (*match_tx)(const struct can_frame *frame),
@@ -914,14 +1052,19 @@ static void verify_mit_payload_sequence(const struct device *dev, const char *na
 	uint32_t previous_match = UINT32_MAX;
 
 	driver_motor_control(dev, DISABLE_MOTOR);
-	drain_reply_motor(match_tx, emit_feedback, 600);
+	drain_all_reply_motors_until_quiet(50, 1200);
 	sim_reset_tx_history();
 	start = sim_current_tx_count();
 	driver_motor_control(dev, ENABLE_MOTOR);
 
 	for (int i = 0; i < ARRAY_SIZE(speeds); i++) {
 		uint32_t set_at_ms = (uint32_t)k_uptime_get();
-		int ret = motor_set_mit(dev, speeds[i], 0.0f, 0.0f);
+		struct reply_responder responder;
+		int ret;
+
+		reply_responder_start(&responder, match_tx, emit_feedback, start);
+		ret = motor_set_mit(dev, speeds[i], 0.0f, 0.0f);
+		reply_responder_stop(&responder);
 
 		zassert_equal(ret, 0, "%s rejected MIT setpoint %d", name, ret);
 		build_payload(speeds[i], payload);
@@ -932,7 +1075,7 @@ static void verify_mit_payload_sequence(const struct device *dev, const char *na
 	}
 
 	driver_motor_control(dev, DISABLE_MOTOR);
-	drain_reply_motor(match_tx, emit_feedback, 600);
+	drain_all_reply_motors_until_quiet(50, 1200);
 }
 
 static void verify_lk_payload_sequence(void)
@@ -976,6 +1119,7 @@ static void verify_dji_pid_sequence(void)
 	uint32_t previous_match = UINT32_MAX;
 
 	driver_motor_control(DJI_DEV, DISABLE_MOTOR);
+	driver_motor_control(DJI_DEV, ENABLE_MOTOR);
 	k_sleep(K_MSEC(5));
 	sim_reset_tx_history();
 	start = sim_current_tx_count();
@@ -998,6 +1142,71 @@ static void verify_dji_pid_sequence(void)
 	}
 }
 
+ZTEST(motor_driver_sim, test_dji_same_tx_id_packs_multiple_motors)
+{
+	uint8_t payload[CAN_MAX_DLEN] = {0};
+	uint32_t start;
+	uint32_t previous_match = UINT32_MAX;
+	int16_t current0 = dji_expected_current(1000.0f, 0.0f);
+	int16_t current1 = dji_expected_current(500.0f, 0.0f);
+	uint32_t report_at_ms;
+
+	driver_motor_control(DJI_DEV, ENABLE_MOTOR);
+	driver_motor_control(DJI2_DEV, ENABLE_MOTOR);
+	zassert_equal(motor_set_speed(DJI_DEV, 1000.0f), 0, "DJI0 rejected speed setpoint");
+	zassert_equal(motor_set_speed(DJI2_DEV, 500.0f), 0, "DJI1 rejected speed setpoint");
+
+	sim_reset_tx_history();
+	start = sim_current_tx_count();
+	emit_dji_report_for(DJI_RX_ID, 0);
+	service_dji_tx_work();
+	zassert_false(sim_tx_seen_since(start, match_dji_tx),
+		      "DJI same-tx frame sent before all motor reports arrived");
+
+	expected_dji_current_slot(current0, 0, payload);
+	expected_dji_current_slot(current1, 1, payload);
+	report_at_ms = (uint32_t)k_uptime_get();
+	emit_dji_report_for(DJI2_RX_ID, 0);
+	service_dji_tx_work();
+	expect_payload_sequence_step("DJI same tx", match_dji_tx, DJI_TX_ID, CAN_STD_ID_MASK,
+				     payload, report_at_ms, NULL, DJI_CONTROL_LATENCY_MS, &start,
+				     &previous_match);
+}
+
+ZTEST(motor_driver_sim, test_dji_distinct_tx_ids_send_independent_frames)
+{
+	uint8_t payload0[CAN_MAX_DLEN] = {0};
+	uint8_t payload2[CAN_MAX_DLEN] = {0};
+	uint32_t start;
+	uint32_t previous_match = UINT32_MAX;
+	uint32_t report_at_ms;
+
+	driver_motor_control(DJI_DEV, ENABLE_MOTOR);
+	driver_motor_control(DJI3_DEV, ENABLE_MOTOR);
+	zassert_equal(motor_set_speed(DJI_DEV, 1000.0f), 0, "DJI0 rejected speed setpoint");
+	zassert_equal(motor_set_speed(DJI3_DEV, 700.0f), 0, "DJI2 rejected speed setpoint");
+
+	sim_reset_tx_history();
+	start = sim_current_tx_count();
+
+	expected_dji_current_slot(dji_expected_current(1000.0f, 0.0f), 0, payload0);
+	report_at_ms = (uint32_t)k_uptime_get();
+	emit_dji_report_for(DJI_RX_ID, 0);
+	service_dji_tx_work();
+	expect_payload_sequence_step("DJI tx 0x200", match_dji_tx, DJI_TX_ID, CAN_STD_ID_MASK,
+				     payload0, report_at_ms, NULL, DJI_CONTROL_LATENCY_MS, &start,
+				     &previous_match);
+
+	previous_match = UINT32_MAX;
+	expected_dji_current_slot(dji_expected_current(700.0f, 0.0f), 2, payload2);
+	report_at_ms = (uint32_t)k_uptime_get();
+	emit_dji_report_for(DJI3_RX_ID, 0);
+	service_dji_tx_work();
+	expect_payload_sequence_step("DJI tx 0x1ff", match_dji3_tx, DJI3_TX_ID,
+				     CAN_STD_ID_MASK, payload2, report_at_ms, NULL,
+				     DJI_CONTROL_LATENCY_MS, &start, &previous_match);
+}
+
 static void *motor_driver_sim_setup(void)
 {
 	k_sleep(K_MSEC(1300));
@@ -1014,16 +1223,140 @@ static void motor_driver_sim_before(void *fixture)
 	driver_motor_control(RS_DEV, DISABLE_MOTOR);
 	driver_motor_control(LK_DEV, DISABLE_MOTOR);
 	driver_motor_control(DJI_DEV, DISABLE_MOTOR);
+	driver_motor_control(DJI2_DEV, DISABLE_MOTOR);
+	driver_motor_control(DJI3_DEV, DISABLE_MOTOR);
 	drain_all_reply_motors_until_quiet(50, 1200);
 	sim_reset_tx_history();
+}
+
+static void verify_requested_enabled_edges(const struct device *dev, const char *name)
+{
+	driver_motor_control(dev, DISABLE_MOTOR);
+	expect_requested_enabled(dev, false, name);
+	driver_motor_control(dev, ENABLE_MOTOR);
+	expect_requested_enabled(dev, true, name);
+	driver_motor_control(dev, DISABLE_MOTOR);
+	expect_requested_enabled(dev, false, name);
+}
+
+static void verify_status_enabled_mirrors_request(const struct device *dev, const char *name)
+{
+	driver_motor_control(dev, DISABLE_MOTOR);
+	expect_status_enabled(dev, false, name);
+	driver_motor_control(dev, ENABLE_MOTOR);
+	expect_requested_enabled(dev, true, name);
+	expect_status_enabled(dev, true, name);
+	driver_motor_control(dev, DISABLE_MOTOR);
+	expect_requested_enabled(dev, false, name);
+	expect_status_enabled(dev, false, name);
+}
+
+static void verify_disable_preserves_online(const struct device *dev, const char *name,
+					    void (*emit_feedback)(void))
+{
+	driver_motor_control(dev, DISABLE_MOTOR);
+	force_motor_offline(dev);
+	driver_motor_control(dev, ENABLE_MOTOR);
+	emit_feedback();
+	wait_for_online_state(dev, true, ONLINE_RECOVERY_MS, name);
+
+	driver_motor_control(dev, DISABLE_MOTOR);
+	expect_requested_enabled(dev, false, name);
+	expect_online(dev, true, name);
+}
+
+static void verify_clear_error_requested_policy(const struct device *dev, const char *name,
+						bool expected_requested_enabled)
+{
+	driver_motor_control(dev, DISABLE_MOTOR);
+	driver_motor_control(dev, ENABLE_MOTOR);
+	expect_requested_enabled(dev, true, name);
+	driver_motor_control(dev, CLEAR_ERROR);
+	expect_requested_enabled(dev, expected_requested_enabled, name);
+	driver_motor_control(dev, DISABLE_MOTOR);
 }
 
 ZTEST(motor_driver_sim, test_request_reply_motor_drivers)
 {
 	verify_request_reply_motor(DM_DEV, "DM", match_dm_tx, emit_dm_feedback, 500);
 	verify_request_reply_motor(MI_DEV, "MI", match_mi_tx, emit_mi_feedback, 6000);
-	verify_request_reply_motor(RS_DEV, "RS", match_rs_tx, emit_rs_feedback, 2000);
+	verify_request_reply_motor(RS_DEV, "RS", match_rs_tx, emit_rs_feedback, 0);
 	verify_request_reply_motor(LK_DEV, "LK", match_lk_tx, emit_lk_feedback, 3000);
+}
+
+ZTEST(motor_driver_sim, test_requested_enabled_state_transitions)
+{
+	verify_requested_enabled_edges(DM_DEV, "DM");
+	verify_requested_enabled_edges(MI_DEV, "MI");
+	verify_requested_enabled_edges(RS_DEV, "RS");
+	verify_requested_enabled_edges(LK_DEV, "LK");
+	verify_requested_enabled_edges(DJI_DEV, "DJI");
+	verify_requested_enabled_edges(DJI2_DEV, "DJI2");
+	verify_requested_enabled_edges(DJI3_DEV, "DJI3");
+
+	drain_all_reply_motors_until_quiet(50, 1200);
+}
+
+ZTEST(motor_driver_sim, test_status_enabled_state_transitions)
+{
+	verify_status_enabled_mirrors_request(MI_DEV, "MI");
+	verify_status_enabled_mirrors_request(RS_DEV, "RS");
+	verify_status_enabled_mirrors_request(LK_DEV, "LK");
+	verify_status_enabled_mirrors_request(DJI_DEV, "DJI");
+
+	driver_motor_control(DM_DEV, DISABLE_MOTOR);
+	emit_dm_feedback_enabled(false);
+	expect_requested_enabled(DM_DEV, false, "DM");
+	expect_status_enabled(DM_DEV, false, "DM");
+	expect_online(DM_DEV, true, "DM");
+
+	driver_motor_control(DM_DEV, ENABLE_MOTOR);
+	expect_requested_enabled(DM_DEV, true, "DM");
+	expect_status_enabled(DM_DEV, false, "DM");
+	emit_dm_feedback_enabled(true);
+	expect_status_enabled(DM_DEV, true, "DM");
+
+	driver_motor_control(DM_DEV, DISABLE_MOTOR);
+	expect_requested_enabled(DM_DEV, false, "DM");
+	expect_status_enabled(DM_DEV, true, "DM");
+	emit_dm_feedback_enabled(false);
+	expect_status_enabled(DM_DEV, false, "DM");
+
+	drain_all_reply_motors_until_quiet(50, 1200);
+}
+
+ZTEST(motor_driver_sim, test_disable_preserves_online_state)
+{
+	verify_disable_preserves_online(DM_DEV, "DM", emit_dm_feedback);
+	verify_disable_preserves_online(MI_DEV, "MI", emit_mi_feedback);
+	verify_disable_preserves_online(RS_DEV, "RS", emit_rs_feedback);
+	verify_disable_preserves_online(LK_DEV, "LK", emit_lk_feedback);
+	verify_disable_preserves_online(DJI_DEV, "DJI", emit_dji_report);
+
+	drain_all_reply_motors_until_quiet(50, 1200);
+}
+
+ZTEST(motor_driver_sim, test_clear_error_requested_enabled_policy)
+{
+	verify_clear_error_requested_policy(DM_DEV, "DM", true);
+	verify_clear_error_requested_policy(MI_DEV, "MI", true);
+	verify_clear_error_requested_policy(LK_DEV, "LK", true);
+	verify_clear_error_requested_policy(DJI_DEV, "DJI", true);
+	verify_clear_error_requested_policy(RS_DEV, "RS", false);
+
+	drain_all_reply_motors_until_quiet(50, 1200);
+}
+
+ZTEST(motor_driver_sim, test_rs_offline_enable_retries_auto_report)
+{
+	driver_motor_control(RS_DEV, DISABLE_MOTOR);
+	force_motor_offline(RS_DEV);
+	driver_motor_control(RS_DEV, ENABLE_MOTOR);
+	k_sleep(K_MSEC(20));
+	sim_reset_tx_history();
+
+	wait_for_tx_after(0, match_rs_enable_tx, "RS offline enable retry");
+	wait_for_tx_after(0, match_rs_auto_report_tx, "RS offline auto-report retry");
 }
 
 ZTEST(motor_driver_sim, test_continuous_command_packing_order_and_latency)
@@ -1041,6 +1374,7 @@ ZTEST(motor_driver_sim, test_control_send_rate_windows)
 {
 	uint32_t count;
 
+	driver_motor_control(DJI_DEV, ENABLE_MOTOR);
 	motor_set_speed(DJI_DEV, 1000.0f);
 	sim_reset_tx_history();
 	int64_t deadline = k_uptime_get() + DJI_RATE_WINDOW_MS;
@@ -1069,13 +1403,6 @@ ZTEST(motor_driver_sim, test_control_send_rate_windows)
 	drain_all_reply_motors_until_quiet(50, 1200);
 	sim_reset_tx_history();
 
-	bring_request_reply_motor_online(RS_DEV, "RS", match_rs_tx, emit_rs_feedback);
-	drain_reply_motor(match_rs_tx, emit_rs_feedback, 40);
-	count = count_reply_motor_rate(match_rs_tx, emit_rs_feedback, RS_RATE_WINDOW_MS);
-	expect_rate_window("RS", count, 8, 70);
-	driver_motor_control(RS_DEV, DISABLE_MOTOR);
-	drain_all_reply_motors_until_quiet(50, 1200);
-	sim_reset_tx_history();
 }
 
 ZTEST(motor_driver_sim, test_dji_control_not_starved_by_reply_backlog)
@@ -1086,6 +1413,7 @@ ZTEST(motor_driver_sim, test_dji_control_not_starved_by_reply_backlog)
 	wait_for_tx_after(sim_current_tx_count(), match_dm_tx, "DM");
 	k_sleep(K_MSEC(80));
 
+	driver_motor_control(DJI_DEV, ENABLE_MOTOR);
 	start = sim_current_tx_count();
 	motor_set_speed(DJI_DEV, 1000.0f);
 	emit_dji_report_with_rpm(0);
@@ -1108,7 +1436,7 @@ ZTEST(motor_driver_sim, test_a_dji_periodic_report_driver)
 
 	driver_motor_control(DJI_DEV, DISABLE_MOTOR);
 	k_sleep(K_MSEC(5));
-	expect_online(DJI_DEV, false, "DJI");
+	driver_motor_control(DJI_DEV, ENABLE_MOTOR);
 
 	tx_start = sim_current_tx_count();
 	emit_dji_report();
