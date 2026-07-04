@@ -25,6 +25,7 @@
 
 - `tests/native_sim/module_smoke/`
 - `tests/native_sim/pid/`
+- `tests/native_sim/sbus/`
 - `tests/native_sim/motor_driver_sim/`
 
 ### 常用命令
@@ -40,6 +41,7 @@ west twister -T tests/native_sim --platform native_sim/native/64 --inline-logs
 ```shell
 west twister -T tests/native_sim/module_smoke --platform native_sim/native/64 --inline-logs
 west twister -T tests/native_sim/pid --platform native_sim/native/64 --inline-logs
+west twister -T tests/native_sim/sbus --platform native_sim/native/64 --inline-logs
 west twister -T tests/native_sim/motor_driver_sim --platform native_sim/native/64 --inline-logs
 ```
 
@@ -91,6 +93,24 @@ CONFIG_CBPRINTF_FP_SUPPORT=y
 ```
 
 `testcase.yaml` 与 `module_smoke` 一致，平台限定 `native_sim/native/64`。
+
+## sbus
+
+测试路径：`tests/native_sim/sbus/src/main.c` 与 `app.overlay`
+
+测试行为：
+
+- 使用测试专用 UART 设备承载 `sbus,uart` chosen，覆盖 SBUS 驱动初始化路径。
+- 注入一帧有效 SBUS 数据，验证在线通道解析与非法通道错误。
+- 等待超过 500 ms，验证 `sbus_get_digit()` 返回 `-ENETDOWN`、百分比读取返回安全零值，并确认帧缓存与通道数组被清零。
+
+testcase：
+
+```text
+ares.native_sim.sbus
+```
+
+`prj.conf` 启用 `CONFIG_ARES_SBUS`、UART async API 与 runtime configure，平台限定 `native_sim/native/64`。
 
 ## motor_driver_sim
 

@@ -22,12 +22,40 @@
 
 - `requested_enabled` 是主控侧意图。
 - `status.enabled` 是驱动对当前使能状态的暴露，可能来自电机反馈，也可能来自驱动行为模型。
+- `online` 是链路可达性，只能由收到反馈、回复或状态帧来证明。
 
 例如：
 
-- DJI 的 `enabled` 更接近“电机在线并参与控制”。
-- MI、RS 的 `enabled` 直接暴露 `requested_enabled`。
 - DM 额外维护电机反馈中的使能位。
+- DJI、MI、RS 的 `status.enabled` 暴露当前驱动模型中的使能意图，即 `requested_enabled`。
+
+三者的状态机如下：
+
+```mermaid
+stateDiagram-v2
+    direction LR
+
+    state "online" as Link {
+        direction LR
+        [*] --> Offline
+        Offline --> Online: 收到反馈/回复
+        Online --> Offline: 超过丢包/停报阈值
+    }
+
+    state "requested_enabled" as Requested {
+        direction LR
+        [*] --> RequestedFalse
+        RequestedFalse --> RequestedTrue: ENABLE_MOTOR
+        RequestedTrue --> RequestedFalse: DISABLE_MOTOR / 协议特定 CLEAR_ERROR
+    }
+
+    state "status.enabled" as Enabled {
+        direction LR
+        [*] --> EnabledFalse
+        EnabledFalse --> EnabledTrue: 电机反馈或驱动模型确认
+        EnabledTrue --> EnabledFalse: 电机反馈或驱动模型确认
+    }
+```
 
 ## 状态迁移接口
 

@@ -147,7 +147,7 @@ VESC 处于中间状态：控制帧是单向的，在线探测使用 `PING/PONG`
 `motor_telemetry_can_scheduler_health()` 负责把统计快照收敛为日志。默认策略是：
 
 - 只有在 `tx_busy`、drop、ack timeout、pending full 或 giveup 增量出现时输出告警。
-- 调试级日志才输出发送延迟细节。
+- `CONFIG_MOTOR_CAN_SCHED_TX_LATENCY_TRACE` 打开时输出发送延迟细节。
 
 这使得调度器日志更像健康信号，而不是逐帧跟踪。
 

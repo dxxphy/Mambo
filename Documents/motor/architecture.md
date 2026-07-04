@@ -93,6 +93,54 @@ motor 的应用接口由三类调用组成：
 
 `enabled` 表示电机反馈或驱动状态，不等同于用户是否请求使能。用户请求状态保存在 `motor_link_state.requested_enabled` 中，由驱动内部使用。
 
+## 电机状态机
+
+motor 子系统把电机状态拆成三个正交状态机。它们可以同时变化，但语义不能互相替代。
+
+```mermaid
+stateDiagram-v2
+    direction LR
+
+    state "link.online" as Link {
+        direction LR
+        [*] --> LinkOffline
+        LinkOffline: false
+        LinkOnline: true
+        LinkOffline --> LinkOnline: 收到反馈/回复/状态帧
+        LinkOnline --> LinkOnline: 持续收到反馈
+        LinkOnline --> LinkOffline: 回复或上报超时
+        LinkOffline --> LinkOffline: 继续无有效接收
+    }
+
+    state "link.requested_enabled" as Request {
+        direction LR
+        [*] --> RequestDisabled
+        RequestDisabled: false
+        RequestEnabled: true
+        RequestDisabled --> RequestEnabled: ENABLE_MOTOR
+        RequestEnabled --> RequestDisabled: DISABLE_MOTOR / 协议特定 CLEAR_ERROR
+    }
+
+    state "status.enabled" as Status {
+        direction LR
+        [*] --> StatusDisabled
+        StatusDisabled: false
+        StatusEnabled: true
+        StatusDisabled --> StatusEnabled: 电机反馈已使能
+        StatusEnabled --> StatusDisabled: 电机反馈已失能
+        StatusDisabled --> StatusEnabled: 驱动模型镜像 requested_enabled
+        StatusEnabled --> StatusDisabled: 驱动模型镜像 requested_enabled
+    }
+```
+
+状态约束：
+
+- `online` 只表示链路是否有近期有效接收。发送过控制帧不等于在线。
+- `requested_enabled` 只表示主控意图。调用 `ENABLE_MOTOR` 不等于电机已经使能。
+- `status.enabled` 表示对外暴露的使能状态。优先来自电机反馈；协议没有明确反馈时，驱动可以按自身模型镜像 `requested_enabled`。
+- `DISABLE_MOTOR` 不应把电机标成离线。失能是控制意图，离线是通信事实。
+- 读取业务状态时应同时看 `online` 和 `enabled`。`enabled == true` 但 `online == false` 只能说明主控仍希望或最近认为它是使能状态，不能证明电机当前真实使能。
+
 ## 控制器模型
 
 控制器通过 devicetree 的 `controllers` 属性挂到电机节点。每个控制器声明：
@@ -167,7 +215,7 @@ motor 的应用接口由三类调用组成：
 
 - 电机在线状态发生变化时输出 online/offline。
 - CAN 调度器只有在 `tx_busy`、drop、ack timeout、pending full 或 giveup 增加时输出告警。
-- `CONFIG_MOTOR_LOG_LEVEL >= 4` 时输出调试级 TX latency 统计。
+- `CONFIG_MOTOR_CAN_SCHED_TX_LATENCY_TRACE` 打开时输出 TX latency 统计。
 
 遥测层不负责判断电机是否离线。离线判定由各驱动和 `motor_link` 完成。
 

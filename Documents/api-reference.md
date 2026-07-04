@@ -126,8 +126,8 @@ Wheel API 面向单个轮组。
 
 | 接口 | 说明 | 返回值 |
 | --- | --- | --- |
-| `sbus_get_percent(dev, channelid)` | 读取模拟通道并转换为百分比。 | 通常为 `-1.0..1.0`。 |
-| `sbus_get_digit(dev, channelid)` | 读取数字通道。 | 驱动定义的离散值。 |
+| `sbus_get_percent(dev, channelid)` | 读取模拟通道并转换为百分比。500 ms 未收到有效帧后视为离线并清零通道缓存。 | 在线时通常为 `-1.0..1.0`；离线或通道号非法时返回 `0.0` 并记录错误。 |
+| `sbus_get_digit(dev, channelid)` | 读取数字通道。500 ms 未收到有效帧后视为离线并清零通道缓存。 | 在线时返回驱动定义的离散值；离线返回 `-ENETDOWN`，通道号非法返回 `-EINVAL`。 |
 
 ### PID
 
@@ -194,7 +194,7 @@ PID 接口是旧版控制器工具。Motor 新 controller 不依赖该公共 API
 | `motor_can_sched_get_stats(can_dev, stats)` | 读取统计。 | `0` 成功，负 errno 失败。 |
 
 `struct motor_can_sched_stats` 统计 TX、RX、ack、drop、retry、timeout、queue peak、按优先级 drop、
-窗口占用和调试级 TX latency。
+窗口占用和 `CONFIG_MOTOR_CAN_SCHED_TX_LATENCY_TRACE` 控制的 TX latency。
 
 ### 遥测
 

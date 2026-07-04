@@ -82,6 +82,22 @@
   - 代码使用 `DT_INST(0, rs_motor)`；新增/替换 RS 设备时保持 compatible 与兼容序列。
   - 运行日志与状态节拍用于判定回归时，尽量不改动主控制流程。
 
+## samples/motor/rs_pv_demo
+
+- 用途：DM MC02 上 RS00 电机 PV/CSP 位置模式验证。
+- 构建：
+  - `west build -b dm_mc02 samples/motor/rs_pv_demo`
+  - `west flash`
+- 适用 board：`dm_mc02`
+- 硬件依赖：
+  - `can3`/`fdcan3`（FDCAN3）接口与收发器
+  - RS00 外部供电
+  - `rs00_motor` 设备节点（`compatible = "rs,motor"`）
+  - `rs00_pv_ctrl` 控制器节点
+- 维护规则：
+  - 样例默认使用 `tx_id = <0x01>`、`rx_id = <0xFD>`；替换电机 CAN ID 时同步 overlay 与启动日志。
+  - 位置阶跃限制在零点附近正负 20 度内，用于第一次上电观察 PV 反馈与错误码。
+
 ## samples/motor/test_mi
 
 - 用途：MI 电机 MIT 控制最小化回归样例。
