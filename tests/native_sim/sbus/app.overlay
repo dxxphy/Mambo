@@ -1,0 +1,15 @@
+/ {
+	chosen {
+		sbus,uart = &test_uart;
+	};
+
+	test_uart: test_uart {
+		compatible = "ares,test-uart";
+		status = "okay";
+	};
+
+	sbus0: sbus0 {
+		compatible = "ares,sbus";
+		status = "okay";
+	};
+};
